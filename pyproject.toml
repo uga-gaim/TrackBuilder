@@ -1,0 +1,38 @@
+[project]
+name = "track_builder"
+version = "0.1"
+authors = [
+  { name="Weiming Hu", email="huwx@jmu.edu" },
+]
+description = "An algorithm to reconstruct ship tracks"
+readme = "README.md"
+requires-python = ">=3.8"
+keywords = ["arctic", "shipping", "trajectory", "reconstruction"]
+license = { text = "MIT License" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Intended Audience :: Science/Research",
+]
+dependencies = [
+  "pandas",
+  "numpy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.urls]
+Homepage = "https://github.com/Weiming-Hu/TrackBuilder"
+"Bug Tracker" = "https://github.com/Weiming-Hu/TrackBuilder/issues"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages]
+find = {namespaces = false}
