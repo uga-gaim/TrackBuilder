@@ -1,6 +1,6 @@
-def hello_world():
-    return "Hello, World!"
-
+import pandas as pd
+from sklearn import preprocessing
+import numpy as np
 
 def build_track_table(dataset):
     """
@@ -11,36 +11,53 @@ def build_track_table(dataset):
 
     Args:
 
-    Returns:
+    Returns: Outputs a dictionary in this format: 
+    
+    {
+        month: ['2025-04', '2025-05', '2025-05']
+        segment_id: ['ship_001', s'hip_003', 'ship_002']
+        track_id: ['track_001', 'track_002', 'track_003']
+    }
+
+    #method for getting the months
+    # method for getting the segment id
+    # method for creating/getting the track id
 
     """
+    pass
 
-
-def compare_multi_month_ids(shipid, date_time_utc, flagname, ice_class, astd_cat, sizegorup_gt,
-                          fuel_quality, dist_nextpoint, dist_secpoint, longitude, latitude):
+def bucket_creation(dataset):
     """
-    This method will compare ship id's across multiple months
-    to find all of the different ship id's for one ship.
+    This method will create buckets for ships
+    to simplify comparisons
 
     Args:
+        dataset (dataframe): the dataframe of all ship data being used.
 
     Returns:
+        List: a list of all of the preprocessed ship data.
     """
+    
+    # This is creating the buckets
+    grouped = dataset.groupby(['flagname', 'fuelquality', 'iceclass', 'astd_cat', 'sizegroup_gt'])
+    return grouped
 
-    #Compare dist_nextpoint
 
-def compare_dist_nextpoint(thisShipID, otherShipIDList):
-    """
-    This is a helper method to compare the dist_nextpoint column
-    between different shipid's within the same month.
-    """
+def normalize_group(df_group, columns_to_normalize):
+    for col in columns_to_normalize:
+        std = df_group[col].std()
+        mean = df_group[col].mean()
+        df_group[col + '_zscore'] = (df_group[col] - mean) / std
+        return df_group
 
-    # given a single shipid, we need to find its match for 
-    # the next month (a list of ship ids)
+def normalize_all_groups(grouped, cols_to_normalize):
+    normalized = []
+
+    for _, df_group in grouped:
+        pass
+
 
     
-
-
 
 
 
