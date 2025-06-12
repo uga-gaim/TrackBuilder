@@ -54,7 +54,12 @@ def normalize_all_groups(grouped, cols_to_normalize):
     normalized = []
 
     for _, df_group in grouped:
-        pass
+        norm = normalize_group(df_group.copy(), cols_to_normalize)
+        normalized.append(norm)
+    return pd.concat(normalized, ignore_index=True)
+
+# might not need to normalize data
+
 
 
     
