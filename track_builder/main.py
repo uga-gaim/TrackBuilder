@@ -26,7 +26,16 @@ def build_track_table(dataset):
     """
     pass
 
-def bucket_creation(dataset):
+def preprocess_attributes(df):
+    df = df.copy()
+
+    for col in ['astd_cat', 'flagname', 'fuel_quality', 'ice_class']:
+        df[col] = df[col].astype(str).str.lower().str.strip()
+
+    return df
+
+
+def bucket_creation(df):
     """
     This method will create buckets for ships
     to simplify comparisons
@@ -39,26 +48,13 @@ def bucket_creation(dataset):
     """
     
     # This is creating the buckets
-    grouped = dataset.groupby(['flagname', 'fuelquality', 'iceclass', 'astd_cat', 'sizegroup_gt'])
-    return grouped
+    df['bucket'] = (
+        df['astd_cat'] + '_' +
+        df['flagname'] + '_' +
+        df['sizegroup_gt'].astype(str)
+    )
+    return df
 
-
-def normalize_group(df_group, columns_to_normalize):
-    for col in columns_to_normalize:
-        std = df_group[col].std()
-        mean = df_group[col].mean()
-        df_group[col + '_zscore'] = (df_group[col] - mean) / std
-        return df_group
-
-def normalize_all_groups(grouped, cols_to_normalize):
-    normalized = []
-
-    for _, df_group in grouped:
-        norm = normalize_group(df_group.copy(), cols_to_normalize)
-        normalized.append(norm)
-    return pd.concat(normalized, ignore_index=True)
-
-# might not need to normalize data
 
 
 
