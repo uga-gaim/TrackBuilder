@@ -47,6 +47,109 @@ def build_track_table(dataset):
     print(f"Created {len(tracks)} tracks")
     return pd.DataFrame(results)
 
+def get_top_match_candidates(dataset, segment_id, top_n=3):
+    """
+    Get top N candidate matches for a given segment based on match scores.
+    
+    Parameters:
+    - dataset: The ship tracking dataset
+    - segment_id: The shipid to find candidates for
+    - top_n: Number of top candidates to return (default: 3)
+    
+    Returns:
+    - DataFrame with columns: segment_id, month, track_id, ranking
+    """
+    if len(dataset) == 0:
+        print("Dataset is empty")
+        return pd.DataFrame(columns=['segment_id', 'month', 'track_id', 'ranking'])
+    
+    # Clean up the data
+    data = clean_data(dataset)
+    
+    # Get segments
+    segments = get_segment_summaries(data)
+    
+    # Find the target segment
+    target_segment = segments[segments['shipid'] == segment_id]
+    if len(target_segment) == 0:
+        print(f"Segment {segment_id} not found in dataset")
+        return pd.DataFrame(columns=['segment_id', 'month', 'track_id', 'ranking'])
+    
+    target_segment = target_segment.iloc[0]
+    
+    # Find all potential candidates using scoring system
+    candidates = get_scored_candidates(target_segment, segments)
+    
+    if len(candidates) == 0:
+        print(f"No candidates found for segment {segment_id}")
+        return pd.DataFrame(columns=['segment_id', 'month', 'track_id', 'ranking'])
+    
+    # Get top N candidates
+    top_candidates = candidates.head(min(top_n, len(candidates)))
+    
+    # Create result DataFrame with only requested columns
+    result_df = pd.DataFrame({
+        'segment_id': top_candidates['shipid'].values,
+        'month': top_candidates['month'].values,
+        'track_id': None,  # Will be filled if we have track info
+        'ranking': range(1, len(top_candidates) + 1)
+    })
+    
+    print(f"Found {len(result_df)} candidates for segment {segment_id}")
+    return result_df.reset_index(drop=True)
+
+def get_scored_candidates(current_segment, all_segments):
+    """
+    Find all valid candidates for a given segment and return them sorted by match score.
+    Uses the same logic as the existing scoring system.
+    """
+    ship_type = current_segment['astd_cat'].lower()
+    
+    # Find candidates: same ship characteristics, starts after current ends
+    candidates = all_segments[
+        (all_segments['shipid'] != current_segment['shipid']) &  # Exclude self
+        (all_segments['ship_signature'] == current_segment['ship_signature']) &
+        (all_segments['start_time'] > current_segment['end_time'])
+    ].copy()
+    
+    if len(candidates) == 0:
+        return pd.DataFrame()
+    
+    # Calculate time gap and distance for each candidate
+    current_end_time = current_segment['end_time']
+    current_end_lat = current_segment['end_lat']
+    current_end_lon = current_segment['end_lon']
+    
+    candidates['time_gap_hours'] = candidates['start_time'].apply(
+        lambda x: (x - current_end_time).total_seconds() / 3600
+    )
+    
+    candidates['distance_km'] = candidates.apply(
+        lambda row: distance_between_points(
+            current_end_lat, current_end_lon,
+            row['start_lat'], row['start_lon']
+        ), axis=1
+    )
+    
+    # Calculate implied speed (km/h)
+    candidates['implied_speed'] = candidates.apply(
+        lambda row: row['distance_km'] / row['time_gap_hours'] if row['time_gap_hours'] > 0 else float('inf'),
+        axis=1
+    )
+    
+    # Filter candidates based on realistic constraints
+    valid_candidates = filter_realistic_candidates(candidates, ship_type)
+    
+    if len(valid_candidates) == 0:
+        return pd.DataFrame()
+    
+    # Score candidates (lower score = better match)
+    valid_candidates = valid_candidates.copy()
+    valid_candidates['match_score'] = calculate_match_score(valid_candidates, ship_type)
+    
+    # Return all candidates sorted by match score (best first)
+    return valid_candidates.sort_values('match_score').reset_index(drop=True)
+
 def get_segment_summaries(df):
     """Get summary information for each ship segment (shipid)"""
     segments = []
@@ -317,6 +420,3 @@ def distance_between_points(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     
     return R * c
-
-
-
