@@ -8,7 +8,7 @@ from shapely.geometry import LineString
 from scipy.spatial import distance_matrix
 
 
-def points_to_smooth_lines(df):
+def points_to_smooth_lines(df, return_geo=False):
     all_columns = df.columns
 
     # Use the TS algorithm to reorder rows for each MMSI
@@ -21,6 +21,9 @@ def points_to_smooth_lines(df):
             .apply(traveling_salesman_reorder)
             .reset_index(drop=True)
     )
+
+    if not return_geo:
+        return df
 
     # Convert to points GDF
     reordered = gpd.GeoDataFrame(
