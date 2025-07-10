@@ -23,7 +23,7 @@ def points_to_smooth_lines(df, return_geo=False):
     )
 
     if not return_geo:
-        return df
+        return reordered
 
     # Convert to points GDF
     reordered = gpd.GeoDataFrame(
