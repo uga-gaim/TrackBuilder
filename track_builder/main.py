@@ -30,8 +30,8 @@ def build_track_table(dataset):
     
     print(f"Found {len(segments)} segments across {segments['month'].nunique()} time periods")
     
-    # Build tracks by connecting segments chronologically
-    tracks = build_tracks_flexible(segments)
+    # Build tracks by connecting segments chronologically with improved logic
+    tracks = build_tracks_improved(segments)
     
     # Create the final output table
     results = []
@@ -46,6 +46,272 @@ def build_track_table(dataset):
     
     print(f"Created {len(tracks)} tracks")
     return pd.DataFrame(results)
+
+def build_tracks_improved(segments):
+    """
+    Improved track building with stricter continuity requirements and better scoring
+    """
+    tracks = {}
+    track_num = 1
+    unassigned = set(segments['shipid'].tolist())
+    
+    # Sort segments by start time to process chronologically
+    segments_sorted = segments.sort_values('start_time').reset_index(drop=True)
+    
+    for _, segment in segments_sorted.iterrows():
+        if segment['shipid'] not in unassigned:
+            continue  # Already assigned to a track
+        
+        # Start a new track with this segment
+        track_id = f"track_{track_num:03d}"
+        current_track = [segment['shipid']]
+        unassigned.remove(segment['shipid'])
+        
+        # Keep looking for subsequent segments that could be the same ship
+        current_segment = segment
+        max_consecutive_gaps = 1  # Allow at most 1 month gap
+        consecutive_gaps = 0
+        
+        while True:
+            next_segment = find_next_segment_improved(current_segment, segments_sorted, unassigned)
+            if next_segment is not None:
+                # Check for temporal continuity
+                months_gap = calculate_month_gap(current_segment['month'], next_segment['month'])
+                
+                if months_gap <= 2:  # Max 2 month gap (current + 1 gap + next)
+                    current_track.append(next_segment['shipid'])
+                    unassigned.remove(next_segment['shipid'])
+                    current_segment = next_segment
+                    consecutive_gaps = 0 if months_gap == 1 else consecutive_gaps + 1
+                else:
+                    # Gap too large, stop this track
+                    break
+                    
+                # Stop if we've had too many gaps
+                if consecutive_gaps > max_consecutive_gaps:
+                    break
+            else:
+                break  # No more segments to connect
+        
+        tracks[track_id] = current_track
+        track_num += 1
+    
+    return tracks
+
+def calculate_month_gap(month1, month2):
+    """Calculate the number of months between two month strings (YYYY-MM format)"""
+    try:
+        date1 = datetime.strptime(month1, '%Y-%m')
+        date2 = datetime.strptime(month2, '%Y-%m')
+        
+        # Calculate difference in months
+        month_diff = (date2.year - date1.year) * 12 + (date2.month - date1.month)
+        return month_diff
+    except:
+        return float('inf')  # If parsing fails, treat as infinite gap
+
+def find_next_segment_improved(current_segment, all_segments, unassigned):
+    """
+    Improved segment matching with stricter criteria and better scoring
+    """
+    ship_type = current_segment['astd_cat'].lower()
+    
+    # Find candidates: same ship characteristics, starts after current ends, unassigned
+    candidates = all_segments[
+        (all_segments['shipid'].isin(unassigned)) &
+        (all_segments['ship_signature'] == current_segment['ship_signature']) &
+        (all_segments['start_time'] > current_segment['end_time'])
+    ].copy()
+    
+    if len(candidates) == 0:
+        return None
+    
+    # Calculate metrics for each candidate
+    candidates = calculate_candidate_metrics(current_segment, candidates)
+    
+    # Apply stricter filtering
+    valid_candidates = apply_improved_filters(candidates, ship_type, current_segment)
+    
+    if len(valid_candidates) == 0:
+        return None
+    
+    # Score candidates with improved scoring system
+    valid_candidates = valid_candidates.copy()
+    valid_candidates['match_score'] = calculate_improved_match_score(valid_candidates, ship_type, current_segment)
+    
+    # Only accept candidates with good scores (lower threshold)
+    score_threshold = 0.4  # Reject candidates with scores above 0.4
+    acceptable_candidates = valid_candidates[valid_candidates['match_score'] <= score_threshold]
+    
+    if len(acceptable_candidates) == 0:
+        return None
+    
+    # Return the best match
+    best_match = acceptable_candidates.sort_values('match_score').iloc[0]
+    return best_match
+
+def calculate_candidate_metrics(current_segment, candidates):
+    """Calculate all metrics needed for candidate evaluation"""
+    current_end_time = current_segment['end_time']
+    current_end_lat = current_segment['end_lat']
+    current_end_lon = current_segment['end_lon']
+    
+    candidates['time_gap_hours'] = candidates['start_time'].apply(
+        lambda x: (x - current_end_time).total_seconds() / 3600
+    )
+    
+    candidates['distance_km'] = candidates.apply(
+        lambda row: distance_between_points(
+            current_end_lat, current_end_lon,
+            row['start_lat'], row['start_lon']
+        ), axis=1
+    )
+    
+    # Calculate implied speed (km/h)
+    candidates['implied_speed'] = candidates.apply(
+        lambda row: row['distance_km'] / row['time_gap_hours'] if row['time_gap_hours'] > 0 else float('inf'),
+        axis=1
+    )
+    
+    # Calculate month gap
+    candidates['month_gap'] = candidates.apply(
+        lambda row: calculate_month_gap(current_segment['month'], row['month']),
+        axis=1
+    )
+    
+    return candidates
+
+def apply_improved_filters(candidates, ship_type, current_segment):
+    """Apply improved filtering with stricter constraints"""
+    
+    # Stricter ship type constraints: (max_speed_kmh, max_time_gap_hours, max_distance_km)
+    ship_constraints = {
+        'unknown': (30, 72, 1000),  # Reduced from (50, 168, 2000)
+        'fishing vessels': (25, 48, 600),  # Reduced from (30, 72, 800)
+        'passenger ships': (45, 36, 800),  # Reduced from (60, 48, 1200)
+        'oil product tankers': (30, 96, 1500),  # Reduced from (40, 168, 2500)
+        'other activities': (25, 72, 800),  # Reduced from (40, 168, 1500)
+        'general cargo ships': (25, 96, 1200),  # Reduced from (35, 168, 2000)
+        'ro-ro cargo ships': (35, 48, 1000),  # Reduced from (45, 72, 1500)
+        'cruise ships': (40, 36, 700),  # Reduced from (50, 48, 1000)
+        'refrigerated cargo ships': (25, 96, 1200),  # Reduced from (35, 168, 2000)
+        'chemical tankers': (30, 96, 1400),  # Reduced from (40, 168, 2200)
+        'bulk carriers': (22, 96, 1200),  # Reduced from (30, 168, 2000)
+        'other service offshore vessels': (20, 48, 400),  # Reduced from (25, 72, 600)
+        'offshore supply ships': (20, 48, 400),  # Reduced from (25, 72, 600)
+        'crude oil tankers': (25, 96, 1500),  # Reduced from (35, 168, 2500)
+        'container ships': (35, 96, 2000),  # Reduced from (50, 168, 3000)
+        'gas tankers': (30, 96, 1400),  # Reduced from (40, 168, 2200)
+    }
+    
+    # Get constraints for this ship type
+    max_speed, max_time_gap, max_distance = ship_constraints.get(
+        ship_type, ship_constraints['general cargo ships']
+    )
+    
+    # Apply basic constraints
+    valid = candidates[
+        (candidates['time_gap_hours'] <= max_time_gap) &
+        (candidates['distance_km'] <= max_distance) &
+        (candidates['implied_speed'] <= max_speed) &
+        (candidates['month_gap'] <= 2)  # Max 2 month gap
+    ]
+    
+    # Additional logic-based filters
+    
+    # 1. Penalize very long time gaps even if within limits
+    if len(valid) > 1:
+        # Prefer candidates with shorter time gaps
+        median_gap = valid['time_gap_hours'].median()
+        valid = valid[valid['time_gap_hours'] <= median_gap * 1.5]
+    
+    # 2. Reject unrealistic speeds (too slow or too fast for extended periods)
+    if len(valid) > 1:
+        valid = valid[
+            (valid['implied_speed'] >= 2) &  # Minimum 2 km/h (not stationary)
+            (valid['implied_speed'] <= max_speed * 0.8)  # 80% of max speed
+        ]
+    
+    # 3. Continuity check - prefer next immediate month when possible
+    if len(valid) > 1:
+        immediate_next = valid[valid['month_gap'] == 1]
+        if len(immediate_next) > 0:
+            valid = immediate_next
+    
+    return valid
+
+def calculate_improved_match_score(candidates, ship_type, current_segment):
+    """
+    Improved scoring system that heavily penalizes unrealistic scenarios
+    """
+    # Expected typical speeds for ship types (km/h) - more conservative
+    typical_speeds = {
+        'unknown': 12,
+        'fishing vessels': 8,
+        'passenger ships': 25,
+        'oil product tankers': 15,
+        'other activities': 12,
+        'general cargo ships': 15,
+        'ro-ro cargo ships': 20,
+        'cruise ships': 25,
+        'refrigerated cargo ships': 15,
+        'chemical tankers': 15,
+        'bulk carriers': 12,
+        'other service offshore vessels': 10,
+        'offshore supply ships': 8,
+        'crude oil tankers': 14,
+        'container ships': 22,
+        'gas tankers': 16,
+    }
+    
+    typical_speed = typical_speeds.get(ship_type, 15)
+    
+    # Normalize components (0-1 scale, lower is better)
+    distance_score = np.minimum(candidates['distance_km'] / 500, 1.0)  # Normalize by 500km (stricter)
+    time_score = np.minimum(candidates['time_gap_hours'] / 72, 1.0)     # Normalize by 3 days (stricter)
+    
+    # Speed deviation score (heavily penalize unrealistic speeds)
+    speed_deviation = np.abs(candidates['implied_speed'] - typical_speed) / typical_speed
+    speed_score = np.minimum(speed_deviation, 2.0)  # Allow up to 200% deviation
+    
+    # Month continuity score (heavily favor consecutive months)
+    month_score = candidates['month_gap'].apply(lambda x: 0.0 if x == 1 else 0.5 if x == 2 else 1.0)
+    
+    # Position continuity - check if the route makes geographical sense
+    # (This could be enhanced with actual shipping route data)
+    position_score = calculate_position_continuity_score(candidates, current_segment)
+    
+    # Weighted combination - prioritize continuity and realistic movement
+    total_score = (
+        0.3 * distance_score +      # Distance traveled
+        0.2 * speed_score +         # Speed reasonableness  
+        0.2 * time_score +          # Time gap
+        0.2 * month_score +         # Month continuity
+        0.1 * position_score        # Position logic
+    )
+    
+    return total_score
+
+def calculate_position_continuity_score(candidates, current_segment):
+    """
+    Calculate a score based on position continuity and geographical logic
+    """
+    # Simple heuristic: penalize extreme direction changes
+    current_lat = current_segment['end_lat']
+    current_lon = current_segment['end_lon']
+    
+    scores = []
+    for _, candidate in candidates.iterrows():
+        # Calculate bearing change (simplified)
+        lat_change = candidate['start_lat'] - current_lat
+        lon_change = candidate['start_lon'] - current_lon
+        
+        # Penalize extreme coordinate jumps
+        coord_jump = abs(lat_change) + abs(lon_change)
+        score = min(coord_jump / 10.0, 1.0)  # Normalize by 10 degrees
+        scores.append(score)
+    
+    return np.array(scores)
 
 def get_top_match_candidates(dataset, segment_id, top_n=3):
     """
@@ -101,7 +367,7 @@ def get_top_match_candidates(dataset, segment_id, top_n=3):
 def get_scored_candidates(current_segment, all_segments):
     """
     Find all valid candidates for a given segment and return them sorted by match score.
-    Uses the same logic as the existing scoring system.
+    Uses the improved scoring system.
     """
     ship_type = current_segment['astd_cat'].lower()
     
@@ -115,37 +381,18 @@ def get_scored_candidates(current_segment, all_segments):
     if len(candidates) == 0:
         return pd.DataFrame()
     
-    # Calculate time gap and distance for each candidate
-    current_end_time = current_segment['end_time']
-    current_end_lat = current_segment['end_lat']
-    current_end_lon = current_segment['end_lon']
+    # Calculate metrics
+    candidates = calculate_candidate_metrics(current_segment, candidates)
     
-    candidates['time_gap_hours'] = candidates['start_time'].apply(
-        lambda x: (x - current_end_time).total_seconds() / 3600
-    )
-    
-    candidates['distance_km'] = candidates.apply(
-        lambda row: distance_between_points(
-            current_end_lat, current_end_lon,
-            row['start_lat'], row['start_lon']
-        ), axis=1
-    )
-    
-    # Calculate implied speed (km/h)
-    candidates['implied_speed'] = candidates.apply(
-        lambda row: row['distance_km'] / row['time_gap_hours'] if row['time_gap_hours'] > 0 else float('inf'),
-        axis=1
-    )
-    
-    # Filter candidates based on realistic constraints
-    valid_candidates = filter_realistic_candidates(candidates, ship_type)
+    # Filter candidates based on improved constraints
+    valid_candidates = apply_improved_filters(candidates, ship_type, current_segment)
     
     if len(valid_candidates) == 0:
         return pd.DataFrame()
     
-    # Score candidates (lower score = better match)
+    # Score candidates with improved scoring
     valid_candidates = valid_candidates.copy()
-    valid_candidates['match_score'] = calculate_match_score(valid_candidates, ship_type)
+    valid_candidates['match_score'] = calculate_improved_match_score(valid_candidates, ship_type, current_segment)
     
     # Return all candidates sorted by match score (best first)
     return valid_candidates.sort_values('match_score').reset_index(drop=True)
