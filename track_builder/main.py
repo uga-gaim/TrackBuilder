@@ -456,6 +456,13 @@ def get_scored_candidates_detailed(current_segment: pd.Series, all_segments: pd.
     
     valid_candidates['position_score'] = calculate_position_continuity_score(valid_candidates, current_segment)
     
+    # valid_candidates['distance_score'] = valid_candidates['distance_score'] / valid_candidates['distance_score'].max()
+    # valid_candidates['time_score'] = valid_candidates['time_score'] / valid_candidates['time_score'].max()
+    # valid_candidates['speed_score'] = valid_candidates['speed_score'] / valid_candidates['speed_score'].max()
+
+    # do this for all columns
+
+
     # Calculate final match score
     valid_candidates['match_score'] = (
         0.3 * valid_candidates['distance_score'] +
