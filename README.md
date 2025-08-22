@@ -18,7 +18,7 @@ You can install the `track_builder` module directly from this repository.
 #### First, clone the repository:
 
 ```bash
-git clone git@github.com:Weiming-Hu/TrackBuilder.git
+git clone git@github.com:uga-gaim/TrackBuilder.git
 cd TrackBuilder
 ```
 
