@@ -1,4 +1,3 @@
-# core/io_helpers.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -146,11 +145,14 @@ def validate_coords(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_strings(df: pd.DataFrame) -> pd.DataFrame:
-    """Lowercase and strip common string-based columns."""
+    """Lowercase and strip common string-based columns (preserving NA)."""
     for c in STR_COLS:
         if c in df.columns:
-            df[c] = df[c].astype(str).str.lower().str.strip()
+            # Use pandas StringDtype to keep <NA> instead of 'nan'
+            df[c] = df[c].astype("string")
+            df[c] = df[c].str.strip().str.lower()
     return df
+
 
 
 def add_month(df: pd.DataFrame) -> pd.DataFrame:
