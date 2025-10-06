@@ -44,6 +44,7 @@ def load_astd_data(
     """
     files = iter_files(file_paths, pattern)
 
+    read_csv_kwargs['low_memory'] = False
     
     frames: List[pd.DataFrame] = []
     iterator = range(len(files))
