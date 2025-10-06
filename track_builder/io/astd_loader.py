@@ -5,7 +5,7 @@ from typing import Iterable, Optional, Union, List, Any
 import pandas as pd
 
 # Internal helper imports
-from core.io_helpers import (
+from track_builder.core.io_helpers import (
     DEFAULT_DATA_PATH,
     iter_files,
     read_csv_auto,
