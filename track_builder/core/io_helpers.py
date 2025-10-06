@@ -82,41 +82,30 @@ def iter_files(file_paths: Union[Pathish, Iterable[Pathish], None],
     return files
 
 
-def read_csv_auto(path: Path, **read_csv_kwargs: Any) -> pd.DataFrame:
-    """
-    Lightweight CSV reader with robust fallback:
-      1) sep=None (pandas infers) with UTF-8, then Latin-1.
-      2) explicit common separators (',', ';', '\\t', '|') with UTF-8 then Latin-1.
-    """
-    common_seps = (",", ";", "\t", "|")
-    encodings = ("utf-8", "latin-1")
+# Dans track_builder/core/io_helpers.py
 
-    # 1) Inference attempts (specific logic, kept as is)
-    for enc in encodings:
+def read_csv_auto(path, **kwargs):
+    """
+    Lit un fichier CSV en essayant de deviner automatiquement le séparateur.
+    """
+    # On sait maintenant que le point-virgule est le plus probable pour les données ASTD.
+    # On le met donc en premier dans la liste.
+    separators_to_try = [';', ',']
+
+    for sep in separators_to_try:
         try:
-            df = pd.read_csv(path, sep=None, engine="python", encoding=enc,
-                             low_memory=False, **read_csv_kwargs)
-            
-            # if a single column has a separator in its name, inference failed.
-            if len(df.columns) == 1 and any(sep in str(df.columns[0]) for sep in common_seps):
+            # On passe les kwargs (comme low_memory=False) à l'appel
+            df = pd.read_csv(path, sep=sep, **kwargs)
+
+            if len(df.columns) == 1:
                 raise ValueError("Inference failed, produced a single column.")
-            
+
             return df
         except Exception:
-            pass 
+            # Si ça ne marche pas, on continue et on essaie le suivant
+            continue
 
-    # 2) Explicit separator attempts (merged loops)
-    for enc in encodings:
-        for sep in common_seps:
-            try:
-                df = pd.read_csv(path, sep=sep, encoding=enc,
-                                 low_memory=False, **read_csv_kwargs)
-                if len(df.columns) > 1:
-                    return df 
-            except Exception:
-                continue 
-
-    # If nothing worked
+    # Si aucun des séparateurs n'a fonctionné, on lève une erreur
     raise ValueError(f"Could not parse CSV {path} with any tried configuration.")
 
 
