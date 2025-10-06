@@ -82,8 +82,6 @@ def iter_files(file_paths: Union[Pathish, Iterable[Pathish], None],
     return files
 
 
-# Dans track_builder/core/io_helpers.py
-
 def read_csv_auto(path, **kwargs):
     """
     Lit un fichier CSV en essayant de deviner automatiquement le séparateur.
@@ -101,9 +99,9 @@ def read_csv_auto(path, **kwargs):
                 raise ValueError("Inference failed, produced a single column.")
 
             return df
-        except Exception:
-            # Si ça ne marche pas, on continue et on essaie le suivant
-            continue
+        except Exception as e:  # On donne un nom à l'exception pour pouvoir l'afficher
+            print(f"INFO: Échec de la lecture avec le séparateur '{sep}'. Erreur pandas: {e}")
+            continue  # On continue d'essayer les autres séparateurs
 
     # Si aucun des séparateurs n'a fonctionné, on lève une erreur
     raise ValueError(f"Could not parse CSV {path} with any tried configuration.")

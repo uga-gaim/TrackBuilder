@@ -1,3 +1,4 @@
+# io/astd_loader.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -5,7 +6,7 @@ from typing import Iterable, Optional, Union, List, Any
 import pandas as pd
 
 # Internal helper imports
-from track_builder.core.io_helpers import (
+from core.io_helpers import (
     DEFAULT_DATA_PATH,
     iter_files,
     read_csv_auto,
@@ -43,6 +44,7 @@ def load_astd_data(
     """
     files = iter_files(file_paths, pattern)
 
+    
     frames: List[pd.DataFrame] = []
     iterator = range(len(files))
     if progress and HAS_TQDM:
@@ -52,19 +54,19 @@ def load_astd_data(
     for i in iterator:
         f = files[i]
         df = read_csv_auto(f, **read_csv_kwargs)
-
-        if standardize_cols:
-            df = standardize_columns(df)
-        if infer_datetime_cols:
-            df = parse_dates(df)
-        if validate_coordinates:
-            df = validate_coords(df)
-
-        df = normalize_strings(df)
-        df = add_month(df)
         frames.append(df)
 
     out = pd.concat(frames, ignore_index=True)
+
+    if standardize_cols:
+        out = standardize_columns(out)
+    if infer_datetime_cols:
+        out = parse_dates(out)
+    if validate_coordinates:
+        out = validate_coords(out)
+
+    out = normalize_strings(out)
+    out = add_month(out)
 
     # Ensure presence of key columns (even empty)
     for c in ("shipid", "date_time_utc", "latitude", "longitude",
@@ -100,11 +102,11 @@ def load_astd_monthly(
     months = list(months) if months is not None else list(range(1, 13))
 
     if pattern:
-        cand = iter_files(base, pattern)
-        sel = [p for p in cand if matches_year_month(p.name, year, set(months))]
-        return load_astd_data(sel if sel else base, pattern=(pattern if not sel else None),
-                            progress=progress, **kwargs)
-
+        df = load_astd_data(base, pattern=pattern, progress=progress, **kwargs)
+        if "month" in df.columns:
+            keep = {f"{year}-{m:02d}" for m in months}
+            df = df[df["month"].isin(keep)]
+        return df
 
     candidates = list(base.glob("*.csv"))
     selected = [p for p in candidates if matches_year_month(p.name, year, set(months))]
