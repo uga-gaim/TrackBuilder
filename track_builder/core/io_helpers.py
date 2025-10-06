@@ -84,25 +84,40 @@ def iter_files(file_paths: Union[Pathish, Iterable[Pathish], None],
 
 def read_csv_auto(path: Path, **read_csv_kwargs: Any) -> pd.DataFrame:
     """
-    Lightweight CSV reader with basic auto-detection logic.
-
-    Order of attempts:
-      1) sep=None (let pandas infer) + UTF-8
-      2) sep=None + Latin-1
-      3) sep=';' + Latin-1
-
-    This is sufficient for most ASTD datasets.
+    Lightweight CSV reader with robust fallback:
+      1) sep=None (pandas infers) with UTF-8, then Latin-1.
+      2) explicit common separators (',', ';', '\\t', '|') with UTF-8 then Latin-1.
     """
-    try:
-        return pd.read_csv(path, sep=None, engine="python", encoding="utf-8",
-                           low_memory=False, **read_csv_kwargs)
-    except Exception:
+    common_seps = (",", ";", "\t", "|")
+    encodings = ("utf-8", "latin-1")
+
+    # 1) Inference attempts (specific logic, kept as is)
+    for enc in encodings:
         try:
-            return pd.read_csv(path, sep=None, engine="python", encoding="latin-1",
-                               low_memory=False, **read_csv_kwargs)
+            df = pd.read_csv(path, sep=None, engine="python", encoding=enc,
+                             low_memory=False, **read_csv_kwargs)
+            
+            # if a single column has a separator in its name, inference failed.
+            if len(df.columns) == 1 and any(sep in str(df.columns[0]) for sep in common_seps):
+                raise ValueError("Inference failed, produced a single column.")
+            
+            return df
         except Exception:
-            return pd.read_csv(path, sep=";", encoding="latin-1",
-                               low_memory=False, **read_csv_kwargs)
+            pass 
+
+    # 2) Explicit separator attempts (merged loops)
+    for enc in encodings:
+        for sep in common_seps:
+            try:
+                df = pd.read_csv(path, sep=sep, encoding=enc,
+                                 low_memory=False, **read_csv_kwargs)
+                if len(df.columns) > 1:
+                    return df 
+            except Exception:
+                continue 
+
+    # If nothing worked
+    raise ValueError(f"Could not parse CSV {path} with any tried configuration.")
 
 
 def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
