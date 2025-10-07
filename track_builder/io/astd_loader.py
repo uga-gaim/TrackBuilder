@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Union, List, Any
 import pandas as pd
 
+from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP
 # Internal helper imports
 from track_builder.core.io_helpers import (
     DEFAULT_DATA_PATH,
@@ -26,6 +27,7 @@ Pathish = Union[str, Path]
 def load_astd_data(
     file_paths: Union[Pathish, Iterable[Pathish], None],
     pattern: Optional[str] = None,
+    use_optimized_config: bool = True, # parameter to control optimization
     infer_datetime_cols: bool = True,
     standardize_cols: bool = True,
     validate_coordinates: bool = True,
@@ -44,7 +46,12 @@ def load_astd_data(
     """
     files = iter_files(file_paths, pattern)
 
-    read_csv_kwargs['low_memory'] = False
+    # If the option is enabled, we apply our optimized configuration
+    if use_optimized_config:
+        read_csv_kwargs.setdefault('usecols', ASTD_USEFUL_COLS)
+        read_csv_kwargs.setdefault('dtype', ASTD_DTYPE_MAP)
+
+    read_csv_kwargs.setdefault('low_memory', False)
     
     frames: List[pd.DataFrame] = []
     iterator = range(len(files))

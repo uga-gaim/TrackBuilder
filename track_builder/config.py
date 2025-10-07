@@ -7,7 +7,10 @@ ASTD_USEFUL_COLS = [
     'dist_nextpoint', 
     'sec_nextpoint', 
     'longitude', 
-    'latitude'
+    'latitude',
+    'flagname',
+    'iceclass',
+    'sizegroup_gt'
 ]
 
 ASTD_DTYPE_MAP = {
@@ -16,7 +19,10 @@ ASTD_DTYPE_MAP = {
     'dist_nextpoint': 'float32',
     'sec_nextpoint': 'int32',
     'longitude': 'float32',
-    'latitude': 'float32'
+    'latitude': 'float32',
+    'flagname': 'category',
+    'iceclass': 'category',
+    'sizegroup_gt': 'category',
 }
 
 # ---------- IO HELPERS Constants ----------

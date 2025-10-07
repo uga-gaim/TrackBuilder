@@ -30,8 +30,6 @@ Pathish = Union[str, Path]
 DEFAULT_DATA_PATH = Path(os.getenv("ASTD_DATA_PATH", "./data")).resolve()
 
 
-
-
 def iter_files(file_paths: Union[Pathish, Iterable[Pathish], None],
                pattern: Optional[str]) -> List[Path]:
     """
