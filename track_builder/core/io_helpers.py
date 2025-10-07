@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Optional, Union, List, Dict, Any
+from typing import Iterable, Optional, Union, List
 import os
 import re
 import glob
 
 import numpy as np
 import pandas as pd
+
+from track_builder.config import COLMAP, DATE_CANDS, STR_COLS
 
 # Optional .env loader for ASTD_DATA_PATH
 # (Safe to ignore if python-dotenv is not installed)
@@ -27,27 +29,7 @@ except Exception:
 Pathish = Union[str, Path]
 DEFAULT_DATA_PATH = Path(os.getenv("ASTD_DATA_PATH", "./data")).resolve()
 
-# --- Minimal column normalization based on use-example.ipynb ---
-COLMAP: Dict[str, str] = {
-    # Time columns
-    "date_time_utc": "date_time_utc",
-    "datetime_utc":  "date_time_utc",
-    "timestamp":     "date_time_utc",
-    # Position columns
-    "lat":        "latitude",
-    "latitude":   "latitude",
-    "lon":        "longitude",
-    "long":       "longitude",
-    "longitude":  "longitude",
-    # Identifier and ship attributes
-    "shipid":       "shipid",
-    "astd_cat":     "astd_cat",
-    "flagname":     "flagname",
-    "iceclass":     "iceclass",
-    "sizegroup_gt": "sizegroup_gt",
-}
-STR_COLS   = ("astd_cat", "flagname", "iceclass", "sizegroup_gt")
-DATE_CANDS = ("date_time_utc", "datetime_utc", "timestamp")
+
 
 
 def iter_files(file_paths: Union[Pathish, Iterable[Pathish], None],
