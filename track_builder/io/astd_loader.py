@@ -29,8 +29,7 @@ def load_astd_data(
     infer_datetime_cols: bool = True,
     standardize_cols: bool = True,
     validate_coordinates: bool = True,
-    drop_low_quality: bool = False, 
-    low_quality_threshold_minutes: int = 0,
+    quality_threshold_minutes: int = 0,
     progress: bool = True,
     **read_csv_kwargs: Any,
 ) -> pd.DataFrame:
@@ -70,15 +69,8 @@ def load_astd_data(
         out = parse_dates(out)
     if validate_coordinates:
         out = validate_coords(out)
-
-    # Ensure presence of key columns (even empty)
-    for c in ("shipid", "date_time_utc", "latitude", "longitude",
-              "astd_cat", "flagname", "iceclass", "sizegroup_gt", "month"):
-        if c not in out.columns:
-            out[c] = pd.Series(dtype="object")
-
-    if drop_low_quality:
-        out = quality_filter(out, low_quality_threshold_minutes)
+    if quality_threshold_minutes and quality_threshold_minutes > 0:
+        out = quality_filter(out, quality_threshold_minutes)
 
     if "date_time_utc" in out.columns:
         out = out.sort_values("date_time_utc").reset_index(drop=True)
