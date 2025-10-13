@@ -8,8 +8,6 @@ from track_builder.core.io_helpers import (
     standardize_columns,
     parse_dates,
     validate_coords,
-    normalize_strings,
-    add_month,
     quality_filter,
     matches_year_month,
     DEFAULT_DATA_PATH,
@@ -46,7 +44,6 @@ def test_iter_files_directory_with_pattern(tmp_path: Path):
 
 
 def test_iter_files_none_uses_default_path(monkeypatch, tmp_path: Path):
-    # Redirige DEFAULT_DATA_PATH le temps du test
     monkeypatch.setattr("track_builder.core.io_helpers.DEFAULT_DATA_PATH", tmp_path)
     f = tmp_path / "x.csv"
     f.write_text("z\n", encoding="utf-8")
@@ -118,33 +115,6 @@ def test_validate_coords_filters_invalids():
     assert len(d2) == 1
     assert d2.iloc[0]["latitude"] == 60
     assert d2.iloc[0]["longitude"] == -20
-
-
-# ---------- normalize_strings ----------
-
-def test_normalize_strings_preserves_na_and_lowercase():
-    df = pd.DataFrame({
-        "astd_cat": [" Container Ships ", None],
-        "flagname": [" PANAMA", "LIBERIA "],
-        "iceclass": [None, None],
-        "sizegroup_gt": [" 10000-24999 GT ", None],
-    })
-    d2 = normalize_strings(df)
-    assert str(d2["astd_cat"].dtype) == "string"
-    assert pd.isna(d2.loc[1, "astd_cat"])
-    assert d2.loc[0, "flagname"] == "panama"
-    assert d2.loc[0, "sizegroup_gt"] == "10000-24999 gt"
-
-
-# ---------- add_month ----------
-
-def test_add_month_from_date_time():
-    df = pd.DataFrame({
-        "date_time_utc": pd.to_datetime(["2019-07-15T00:00:00Z"], utc=True)
-    })
-    d2 = add_month(df)
-    assert "month" in d2.columns
-    assert d2.loc[0, "month"] == "2019-07"
 
 
 # ---------- quality_filter ----------
