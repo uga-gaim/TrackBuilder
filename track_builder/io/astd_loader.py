@@ -14,8 +14,6 @@ from track_builder.core.io_helpers import (
     standardize_columns,
     parse_dates,
     validate_coords,
-    normalize_strings,
-    add_month,
     quality_filter,
     matches_year_month,
     HAS_TQDM,
@@ -73,9 +71,6 @@ def load_astd_data(
     if validate_coordinates:
         out = validate_coords(out)
 
-    out = normalize_strings(out)
-    out = add_month(out)
-
     # Ensure presence of key columns (even empty)
     for c in ("shipid", "date_time_utc", "latitude", "longitude",
               "astd_cat", "flagname", "iceclass", "sizegroup_gt", "month"):
@@ -91,35 +86,36 @@ def load_astd_data(
     return out
 
 
+# Fichier : track_builder/io/astd_loader.py
+
 def load_astd_monthly(
-    base_path: Optional[Pathish],
-    year: int,
-    months: Optional[Iterable[int]] = None,
-    pattern: Optional[str] = None,
-    progress: bool = True,
-    **kwargs: Any,
+        base_path: Optional[Pathish],
+        year: int,
+        months: Optional[Iterable[int]] = None,
+        progress: bool = True,
+        **kwargs: Any,
 ) -> pd.DataFrame:
     """
     High-level wrapper: convenient loader for monthly ASTD datasets.
 
-    Examples (as in project_plan.md):
+    This function recursively searches for CSV files in the base_path that match
+    the specified year and months in their filenames.
+
+    Examples:
       df = load_astd_monthly('/data/astd/', 2019, months=[7, 8, 9])
-      df = load_astd_monthly('/data/astd/', 2019)  # full year
+      df = load_astd_monthly('/data/astd/', 2019)  # Loads all months for the full year
     """
     base = Path(base_path).resolve() if base_path is not None else DEFAULT_DATA_PATH
-    months = list(months) if months is not None else list(range(1, 13))
+    months_to_load = set(months) if months is not None else set(range(1, 13))
 
-    if pattern:
-        df = load_astd_data(base, pattern=pattern, progress=progress, **kwargs)
-        if "month" in df.columns:
-            keep = {f"{year}-{m:02d}" for m in months}
-            df = df[df["month"].isin(keep)]
-        return df
+    all_csv_files = base.rglob("*.csv")
 
-    candidates = list(base.glob("*.csv"))
-    selected = [p for p in candidates if matches_year_month(p.name, year, set(months))]
-    if not selected:
-        # fallback: broad pattern for the given year
-        return load_astd_data(base, pattern=f"*{year}*csv", progress=progress, **kwargs)
+    selected_files = [
+        p for p in all_csv_files if matches_year_month(p.name, year, months_to_load)
+    ]
 
-    return load_astd_data(selected, progress=progress, **kwargs)
+    if not selected_files:
+        print(f"No files found for year {year} and months {list(months_to_load)} in {base}.")
+        return pd.DataFrame()  # Return empty dataFrame
+
+    return load_astd_data(selected_files, progress=progress, **kwargs)

@@ -125,24 +125,6 @@ def validate_coords(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def normalize_strings(df: pd.DataFrame) -> pd.DataFrame:
-    """Lowercase and strip common string-based columns (preserving NA)."""
-    for c in STR_COLS:
-        if c in df.columns:
-            # Use pandas StringDtype to keep <NA> instead of 'nan'
-            df[c] = df[c].astype("string")
-            df[c] = df[c].str.strip().str.lower()
-    return df
-
-
-
-def add_month(df: pd.DataFrame) -> pd.DataFrame:
-    """Add a 'month' column (YYYY-MM) derived from date_time_utc."""
-    if "date_time_utc" in df.columns:
-        df["month"] = df["date_time_utc"].dt.to_period("M").astype(str)
-    return df
-
-
 def quality_filter(df: pd.DataFrame, threshold_minutes: int) -> pd.DataFrame:
     """
     Remove (shipid, month) groups whose average sampling frequency
