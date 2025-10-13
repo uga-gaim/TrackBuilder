@@ -64,15 +64,14 @@ def iter_files(file_paths: Union[Pathish, Iterable[Pathish], None],
 
 def read_csv_auto(path, **kwargs):
     """
-    Lit un fichier CSV en essayant de deviner automatiquement le séparateur.
+    Reads a CSV file by automatically trying to guess the separator.
     """
-    # On sait maintenant que le point-virgule est le plus probable pour les données ASTD.
-    # On le met donc en premier dans la liste.
+    # Semicolon is the most likely separator for ASTD data, so we try it first.
     separators_to_try = [';', ',']
 
     for sep in separators_to_try:
         try:
-            # On passe les kwargs (comme low_memory=False) à l'appel
+            # We pass the kwargs (like low_memory=False) to the call to read_csv
             df = pd.read_csv(path, sep=sep, **kwargs)
 
             if len(df.columns) == 1:
@@ -80,7 +79,7 @@ def read_csv_auto(path, **kwargs):
 
             return df
         except Exception as e:  # On donne un nom à l'exception pour pouvoir l'afficher
-            print(f"INFO: Échec de la lecture avec le séparateur '{sep}'. Erreur pandas: {e}")
+            print(f"INFO: Failed to read with separator '{sep}'. Pandas error: {e}")
             continue  # On continue d'essayer les autres séparateurs
 
     # Si aucun des séparateurs n'a fonctionné, on lève une erreur
