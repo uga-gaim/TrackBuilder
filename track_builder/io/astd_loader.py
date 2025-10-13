@@ -53,7 +53,7 @@ def load_astd_data(
     frames: List[pd.DataFrame] = []
     iterator = range(len(files))
     if progress and HAS_TQDM:
-        from tqdm import tqdm  # lazy import to avoid dependency if not installed
+        from tqdm.auto import tqdm  # lazy import to avoid dependency if not installed
         iterator = tqdm(iterator, total=len(files), desc="Loading ASTD CSVs")
 
     for i in iterator:
