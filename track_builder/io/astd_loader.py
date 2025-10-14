@@ -68,8 +68,6 @@ def load_astd_data(
         out = standardize_columns(out)
     if infer_datetime_cols:
         out = parse_dates(out)
-    if validate_coordinates:
-        out = validate_coords(out)
     if quality_threshold_minutes and quality_threshold_minutes > 0:
         out = quality_filter(out, quality_threshold_minutes)
 
