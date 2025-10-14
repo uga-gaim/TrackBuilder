@@ -78,11 +78,10 @@ def read_csv_auto(path, **kwargs):
                 raise ValueError("Inference failed, produced a single column.")
 
             return df
-        except Exception as e:  # On donne un nom à l'exception pour pouvoir l'afficher
+        except Exception as e:  
             print(f"INFO: Failed to read with separator '{sep}'. Pandas error: {e}")
-            continue  # On continue d'essayer les autres séparateurs
+            continue 
 
-    # Si aucun des séparateurs n'a fonctionné, on lève une erreur
     raise ValueError(f"Could not parse CSV {path} with any tried configuration.")
 
 

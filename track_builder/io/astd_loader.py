@@ -25,7 +25,7 @@ Pathish = Union[str, Path]
 def load_astd_data(
     file_paths: Union[Pathish, Iterable[Pathish], None],
     pattern: Optional[str] = None,
-    use_optimized_config: bool = True, # parameter to control optimization
+    usecols: Optional[Union[str, List[str]]] = None,
     infer_datetime_cols: bool = True,
     standardize_cols: bool = True,
     validate_coordinates: bool = True,
@@ -43,10 +43,11 @@ def load_astd_data(
     """
     files = iter_files(file_paths, pattern)
 
-    # If the option is enabled, we apply our optimized configuration
-    if use_optimized_config:
+    if usecols in ("default", "essential"):
         read_csv_kwargs.setdefault('usecols', ASTD_USEFUL_COLS)
         read_csv_kwargs.setdefault('dtype', ASTD_DTYPE_MAP)
+    elif usecols is not None:
+        read_csv_kwargs.setdefault('usecols', usecols)
 
     read_csv_kwargs.setdefault('low_memory', False)
     
