@@ -28,7 +28,6 @@ def load_astd_data(
     usecols: Optional[Union[str, List[str]]] = None,
     infer_datetime_cols: bool = True,
     standardize_cols: bool = True,
-    validate_coordinates: bool = True,
     quality_threshold_minutes: int = 0,
     progress: bool = True,
     **read_csv_kwargs: Any,
