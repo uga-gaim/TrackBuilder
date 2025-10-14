@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Optional, Union, List, Any
+from typing import Iterable, Optional, Union, List, Any, Sequence
 import pandas as pd
 
 from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP
@@ -13,24 +13,26 @@ from track_builder.core.io_helpers import (
     read_csv_auto,
     standardize_columns,
     parse_dates,
-    validate_coords,
     quality_filter,
     matches_year_month,
     HAS_TQDM,
+    sample_by_day_of_month,
+    make_skipper,
 )
 
 Pathish = Union[str, Path]
 
 
 def load_astd_data(
-    file_paths: Union[Pathish, Iterable[Pathish], None],
-    pattern: Optional[str] = None,
-    usecols: Optional[Union[str, List[str]]] = None,
-    infer_datetime_cols: bool = True,
-    standardize_cols: bool = True,
-    quality_threshold_minutes: int = 0,
-    progress: bool = True,
-    **read_csv_kwargs: Any,
+        file_paths: Union[Pathish, Iterable[Pathish], None],
+        pattern: Optional[str] = None,
+        usecols: Optional[Union[str, List[str]]] = None,
+        sampling: Optional[Union[float, Sequence[int]]] = None,
+        infer_datetime_cols: bool = True,
+        standardize_cols: bool = True,
+        quality_threshold_minutes: int = 0,
+        progress: bool = True,
+        **read_csv_kwargs: Any,
 ) -> pd.DataFrame:
     """
     High-level wrapper: simplified loading & preprocessing of ASTD datasets.
@@ -49,7 +51,8 @@ def load_astd_data(
         read_csv_kwargs.setdefault('usecols', usecols)
 
     read_csv_kwargs.setdefault('low_memory', False)
-    
+    rs = read_csv_kwargs.pop("random_state", None)
+
     frames: List[pd.DataFrame] = []
     iterator = range(len(files))
     if progress and HAS_TQDM:
@@ -58,15 +61,31 @@ def load_astd_data(
 
     for i in iterator:
         f = files[i]
-        df = read_csv_auto(f, **read_csv_kwargs)
+        iter_kwargs = read_csv_kwargs.copy()
+
+        if isinstance(sampling, float):
+             # For fractional sampling, use skiprows with a callable (fast and memory friendly)
+            skipper = make_skipper(sampling, rs)
+            iter_kwargs['skiprows'] = skipper
+            df = read_csv_auto(f, **iter_kwargs)
+        else:
+            # For all other cases (None or Sequence), read the entire file
+            df = read_csv_auto(f, **iter_kwargs)
+
+        if standardize_cols:
+            df = standardize_columns(df)
+        if infer_datetime_cols:
+            df = parse_dates(df)
+
+            # And if it's a sequence, we filter AFTER reading
+        if isinstance(sampling, Sequence) and not isinstance(sampling, str) and len(sampling) > 0:
+            df = sample_by_day_of_month(df, sampling)
+
         frames.append(df)
 
     out = pd.concat(frames, ignore_index=True)
 
-    if standardize_cols:
-        out = standardize_columns(out)
-    if infer_datetime_cols:
-        out = parse_dates(out)
+    
     if quality_threshold_minutes and quality_threshold_minutes > 0:
         out = quality_filter(out, quality_threshold_minutes)
 
@@ -76,7 +95,6 @@ def load_astd_data(
     return out
 
 
-# Fichier : track_builder/io/astd_loader.py
 
 def load_astd_monthly(
         base_path: Optional[Pathish],

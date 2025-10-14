@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Optional, Union, List
+from typing import Iterable, Optional, Union, List, Sequence, Any, Callable
 import os
 import re
 import glob
@@ -15,6 +15,7 @@ from track_builder.config import COLMAP, DATE_CANDS, STR_COLS
 # (Safe to ignore if python-dotenv is not installed)
 try:
     from dotenv import load_dotenv  # type: ignore
+
     load_dotenv()
 except Exception:
     pass
@@ -22,6 +23,7 @@ except Exception:
 # Optional progress bar support using tqdm
 try:
     from tqdm import tqdm  # type: ignore
+
     HAS_TQDM = True
 except Exception:
     HAS_TQDM = False
@@ -41,6 +43,7 @@ def iter_files(file_paths: Union[Pathish, Iterable[Pathish], None],
       - Directory with optional pattern (defaults to *.csv)
       - None → uses DEFAULT_DATA_PATH
     """
+
     def dir_glob(d: Path, patt: Optional[str]) -> List[Path]:
         patt = patt or "*.csv"
         return [Path(p) for p in glob.glob(str(d / patt))]
@@ -78,9 +81,9 @@ def read_csv_auto(path, **kwargs):
                 raise ValueError("Inference failed, produced a single column.")
 
             return df
-        except Exception as e:  
+        except Exception as e:
             print(f"INFO: Failed to read with separator '{sep}'. Pandas error: {e}")
-            continue 
+            continue
 
     raise ValueError(f"Could not parse CSV {path} with any tried configuration.")
 
@@ -151,3 +154,63 @@ def matches_year_month(filename: str, year: int, months: set[int]) -> bool:
     """Return True if filename contains a pattern matching year+month."""
     m = re.findall(r"((?:19|20)\d{2})[-_]?(\d{2})", filename)
     return any(int(y) == year and int(mm) in months for y, mm in m)
+
+
+def make_skipper(frac: float, seed: Optional[int]) -> Callable[[int], bool]:
+    """Return a skiprows callable: True = skip the row (header is never skipped)."""
+    if not (0.0 < frac <= 1.0):
+        raise ValueError("If 'sampling' is a float, it must be in (0, 1].")
+    rng = np.random.default_rng(seed)
+
+    def skipper(i: int) -> bool:
+        if i == 0:  # header row
+            return False
+        return rng.random() > frac
+
+    return skipper
+
+
+
+
+
+# io_helpers.py
+def sample_by_day_of_month(df: pd.DataFrame, indices: Sequence[int]) -> pd.DataFrame:
+    """
+    Select rows for specific day-of-month indices.
+    Assumes a single month per file.
+    If 'date_time_utc' is missing or not datetime, parse dates first.
+    """
+    # Ensure datetime column
+    if 'date_time_utc' not in df.columns or not pd.api.types.is_datetime64_any_dtype(df['date_time_utc']):
+        df = parse_dates(df)  # <- ensures/renames to 'date_time_utc' if possible
+
+    if 'date_time_utc' not in df.columns or not pd.api.types.is_datetime64_any_dtype(df['date_time_utc']):
+        print("Warning: 'date_time_utc' column not found or not a datetime type. Cannot sample by day.")
+        return df
+    if df.empty:
+        return df
+
+    # Enforce assignment bounds: -31..30
+    normalized_idxs: list[int] = []
+    for v in indices:
+        if not isinstance(v, int):
+            raise ValueError("If 'sampling' is a sequence, it must contain integers.")
+        if v < -31 or v > 30:
+            raise ValueError("Day indices must be between -31 and 30.")
+        normalized_idxs.append(v)
+
+    unique_days = sorted(df['date_time_utc'].dt.day.dropna().unique().tolist())
+    if not unique_days:
+        return df.iloc[0:0].copy()
+
+    n = len(unique_days)
+    chosen: set[int] = set()
+    for k in set(normalized_idxs):
+        pos = k if k >= 0 else n + k
+        if 0 <= pos < n:
+            chosen.add(int(unique_days[pos]))
+
+    if not chosen:
+        return df.iloc[0:0].copy()
+
+    return df[df['date_time_utc'].dt.day.isin(chosen)].copy()
