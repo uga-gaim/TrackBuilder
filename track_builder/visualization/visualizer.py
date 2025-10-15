@@ -28,15 +28,29 @@ def plot_ship_tracks(
         zoom: Optional[float] = None,
 ) -> go.Figure:
     """
-    Visualisation simple des positions et, si disponible, des lignes par track_id.
-    - Réutilise la standardisation de colonnes (Partie 1).
-    - N’effectue pas de vérifs d’I/O (déjà faites en amont par load_astd_data).
+    Plots ship tracks and positions on an interactive map using Plotly.
+        Args:
+            data (pd.DataFrame): Input DataFrame containing ship position data. Must include latitude, longitude, and timestamp columns.
+            track_ids (Optional[Iterable[Union[str, int]]], optional): Specific track IDs to filter and plot. If None, all tracks are plotted.
+            show_points (bool, optional): If True, displays individual position points on the map. Defaults to True.
+            line_width (float, optional): Width of the track lines. Defaults to 2.0.
+            map_style (str, optional): Mapbox style to use for the background. Defaults to "open-street-map".
+            title (Optional[str], optional): Title of the plot. If None, a default title is used.
+            height (int, optional): Height of the figure in pixels. Defaults to 720.
+            zoom (Optional[float], optional): Initial zoom level for the map. If None, a default zoom is used.
+        Returns:
+            go.Figure: A Plotly Figure object displaying the ship tracks and positions.
+        Notes:
+            - The function automatically detects latitude, longitude, and timestamp columns using helper functions.
+            - If track IDs are provided, only the corresponding tracks are plotted.
+            - Each track is plotted as a separate line, and positions are shown as markers if `show_points` is True.
+        
     """
     cols = resolve_geo_time_cols(data)
-    df = cols["_df"]  # df standardisé (copie légère fournie par le helper)
+    df = cols["_df"]  # cleaned DataFrame with standard columns
     lat, lon, tcol = cols["lat"], cols["lon"], cols["time"]
 
-    # filtre optionnel par track_id si présent
+    # optional filtering by track_id if present
     track_col = first_present(df, TRACK_ID_CANDS)
     if track_col and track_ids is not None:
         df = df[df[track_col].isin(set(track_ids))].copy()
@@ -54,7 +68,7 @@ def plot_ship_tracks(
             name="Positions",
         ))
 
-    # lignes par track si on a la colonne
+    # lines by track if we have the column
     if track_col:
         df_sorted = df.sort_values([track_col, tcol])
         for track, g in df_sorted.groupby(track_col):
@@ -90,47 +104,48 @@ def plot_individual_track(
     title=None,
 ) -> go.Figure:
     """
-    Vue détaillée d’un track unique, compatible avec la table émise par main.build_track_table().
-    Hypothèses (issues du main.py précédent) :
-      - track_table contient au moins: 'track_id' et 'segment_id' (ou équivalents)
-      - astd_data (positions) contient souvent 'shipid' plutôt que 'segment_id'
-    On aligne donc 'segment_id' (track_table) <-> 'shipid' (positions) sans supposer le même nom.
+    Detailed view of a single track, compatible with the table produced by main.build_track_table().
+    Assumptions (from previous main.py):
+      - track_table contains at least: 'track_id' and 'segment_id' (or equivalents)
+      - astd_data (positions) often contains 'shipid' instead of 'segment_id'
+    Therefore, 'segment_id' (track_table) is aligned with 'shipid' (positions) without assuming the same column name.
 
-    Paramètres
+    Parameters
     ----------
     track_id : str|int
-        Identifiant du track à visualiser.
+        Identifier of the track to visualize.
     track_table : pd.DataFrame
-        Table des tracks (ex: colonnes ['track_id','segment_id','month']).
+        Table of tracks (e.g., columns ['track_id','segment_id','month']).
     astd_data : pd.DataFrame
-        Données positions déjà chargées/standardisées par la Partie 1.
+        Position data already loaded/standardized by Part 1.
     show_segments : bool
-        Si True, trace une polyline par segment (légende = identifiant côté positions).
+        If True, draws one polyline per segment (legend = identifier from positions).
     map_style : str
-        Style des tuiles Mapbox/OSM ('open-street-map' ne nécessite pas de token).
+        Mapbox/OSM tile style ('open-street-map' does not require a token).
     height : int
-        Hauteur de la figure Plotly.
+        Height of the Plotly figure.
     title : str|None
-        Titre personnalisé.
+        Custom title.
 
-    Retour
-    ------
+    Returns
+    -------
     plotly.graph_objects.Figure
+
     """
 
-    # Colonnes géo + temps (réutilise la standardisation Partie 1 ; pas de re-validations I/O ici)
+    # Geo + time columns (reuse standardization from Part 1; no I/O re-validations here)
     cols = resolve_geo_time_cols(astd_data)
     df = cols["_df"]
     lat, lon, tcol = cols["lat"], cols["lon"], cols["time"]
 
-    # Résolution séparée des colonnes 'segment' pour chaque DataFrame
-    seg_col_track = first_present(track_table, SEGMENT_ID_CANDS)       # p.ex. 'segment_id' côté track_table
-    seg_col_pos = first_present(df, POSITION_SEGMENT_CANDS)          # p.ex. 'shipid'      côté positions
-    track_col = first_present(track_table, TRACK_ID_CANDS)         # p.ex. 'track_id'
+    # Separate resolution of 'segment' columns for each DataFrame
+    seg_col_track = first_present(track_table, SEGMENT_ID_CANDS)       # e.g. 'segment_id' from track_table
+    seg_col_pos = first_present(df, POSITION_SEGMENT_CANDS)          #  e.g. 'shipid' from astd_data
+    track_col = first_present(track_table, TRACK_ID_CANDS)         # e.g. 'track_id' from track_table
 
     if seg_col_track is None or seg_col_pos is None or track_col is None:
         raise KeyError(
-            "Colonnes attendues manquantes : "
+            "Missing expected columns: "
             f"track_table[{SEGMENT_ID_CANDS + TRACK_ID_CANDS}] et "
             f"astd_data[{POSITION_SEGMENT_CANDS}]."
         )
@@ -142,24 +157,24 @@ def plot_individual_track(
         tt = tt.sort_values(month_col)
 
     if tt.empty:
-        raise ValueError(f"Track '{track_id}' introuvable dans track_table.")
+        raise ValueError(f"Track '{track_id}' not found in track_table.")
 
-    # Liste des segments côté track_table (ex: valeurs de 'segment_id')
+    # List of segments from track_table (e.g., values from 'segment_id')
     segment_ids = set(tt[seg_col_track].dropna().unique().tolist())
 
-    # On filtre les positions avec la colonne équivalente côté positions (ex: 'shipid')
+    # Filter positions with the equivalent column from positions (e.g., 'shipid')
     pos = df[df[seg_col_pos].isin(segment_ids)].copy()
     if pos.empty:
         raise ValueError(
-            "Aucune position trouvée pour ce track/segments dans astd_data. "
-            f"Comparé via astd_data['{seg_col_pos}'] ∈ track_table['{seg_col_track}']."
+            "No positions found for this track/segments in astd_data. "
+            f"Compared via astd_data['{seg_col_pos}'] ∈ track_table['{seg_col_track}']."
         )
 
-    # Construction de la figure
+    # Plotly figure
     fig = go.Figure()
 
     if show_segments:
-        # Une polyline par 'segment' tel que nommé côté positions (souvent 'shipid')
+        # One polyline per 'segment' as named in positions (often 'shipid')
         pos_sorted = pos.sort_values([seg_col_pos, tcol])
         for seg, g in pos_sorted.groupby(seg_col_pos):
             fig.add_trace(go.Scattermapbox(
@@ -178,7 +193,7 @@ def plot_individual_track(
             ))
 
     else:
-        # Une seule polyline pour tout le track
+        # One polyline for the entire track
         g = pos.sort_values(tcol)
         fig.add_trace(go.Scattermapbox(
             lat=g[lat],
@@ -189,7 +204,7 @@ def plot_individual_track(
             hoverinfo="skip",
         ))
 
-    # Mise en page / centrage
+    # Layout / centering
     fig.update_layout(
         mapbox_style=map_style,
         mapbox_zoom=3,

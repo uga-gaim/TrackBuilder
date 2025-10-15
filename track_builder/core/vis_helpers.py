@@ -21,16 +21,16 @@ def first_present(df: pd.DataFrame, cands: tuple[str, ...]) -> Optional[str]:
 
 def resolve_geo_time_cols(df: pd.DataFrame) -> Dict[str, str]:
     """
-    Utilise la standardisation Partie 1 pour obtenir les colonnes canoniques.
-    - Ne refait pas les validations d'I/O.
-    - Cherche 'date_time_utc' en priorité, puis toute autre date de DATE_CANDS si besoin.
+    Uses standardization Part 1 to obtain canonical columns.
+    - Does not redo I/O validations.
+    - Looks for 'date_time_utc' first, then any other date from DATE_CANDS if needed.
     """
     std = standardize_columns(df.copy())
 
     lat = "latitude" if "latitude" in std.columns else None
     lon = "longitude" if "longitude" in std.columns else None
 
-    # priorité au nom canonique, sinon fallback sur les candidats déclarés en config
+    # Time column: prefer 'date_time_utc' if present
     if "date_time_utc" in std.columns:
         tcol = "date_time_utc"
     else:
@@ -38,11 +38,11 @@ def resolve_geo_time_cols(df: pd.DataFrame) -> Dict[str, str]:
 
     if not all([lat, lon, tcol]):
         raise KeyError(
-            "Impossible de détecter latitude/longitude/time après standardize_columns(). "
-            f"Présent: {list(std.columns)} ; attendu: latitude/longitude/({', '.join(('date_time_utc',) + DATE_CANDS)})"
+            "Impossible to detect latitude/longitude/time after standardize_columns(). "
+            f"Present: {list(std.columns)} ; expected: latitude/longitude/({', '.join(('date_time_utc',) + DATE_CANDS)})"
         )
 
-    # conversion légère vers datetime si nécessaire (sans revalider)
+    # Light conversion to datetime if necessary (without re-validating)
     if not pd.api.types.is_datetime64_any_dtype(std[tcol]):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

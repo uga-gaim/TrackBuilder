@@ -170,10 +170,6 @@ def make_skipper(frac: float, seed: Optional[int]) -> Callable[[int], bool]:
     return skipper
 
 
-
-
-
-# io_helpers.py
 def sample_by_day_of_month(df: pd.DataFrame, indices: Sequence[int]) -> pd.DataFrame:
     """
     Select rows for specific day-of-month indices.
