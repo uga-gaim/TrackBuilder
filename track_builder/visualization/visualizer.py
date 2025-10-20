@@ -17,70 +17,122 @@ POSITION_SEGMENT_CANDS = ("shipid", "segment_id")
 
 
 def plot_ship_tracks(
-        data: pd.DataFrame,
-        track_ids: Optional[Iterable[Union[str, int]]] = None,
-        *,
-        show_points: bool = True,
-        line_width: float = 2.0,
-        map_style: str = "open-street-map",
-        title: Optional[str] = None,
-        height: int = 720,
-        zoom: Optional[float] = None,
+    data: pd.DataFrame,
+    track_ids: Optional[Iterable[Union[str, int]]] = None,
+    *,
+    # ---- Nouveaux paramètres ----
+    color_by: Optional[str] = None,
+    date_from: Optional[pd.Timestamp] = None,
+    date_to: Optional[pd.Timestamp] = None,
+    ship_types: Optional[Iterable[str]] = None,
+    flags: Optional[Iterable[str]] = None,
+    #
+    show_points: bool = True,
+    line_width: float = 2.0,
+    map_style: str = "open-street-map",
+    title: Optional[str] = None,
+    height: int = 720,
+    zoom: Optional[float] = None,
 ) -> go.Figure:
     """
     Plots ship tracks and positions on an interactive map using Plotly.
-        Args:
-            data (pd.DataFrame): Input DataFrame containing ship position data. Must include latitude, longitude, and timestamp columns.
-            track_ids (Optional[Iterable[Union[str, int]]], optional): Specific track IDs to filter and plot. If None, all tracks are plotted.
-            show_points (bool, optional): If True, displays individual position points on the map. Defaults to True.
-            line_width (float, optional): Width of the track lines. Defaults to 2.0.
-            map_style (str, optional): Mapbox style to use for the background. Defaults to "open-street-map".
-            title (Optional[str], optional): Title of the plot. If None, a default title is used.
-            height (int, optional): Height of the figure in pixels. Defaults to 720.
-            zoom (Optional[float], optional): Initial zoom level for the map. If None, a default zoom is used.
-        Returns:
-            go.Figure: A Plotly Figure object displaying the ship tracks and positions.
-        Notes:
-            - The function automatically detects latitude, longitude, and timestamp columns using helper functions.
-            - If track IDs are provided, only the corresponding tracks are plotted.
-            - Each track is plotted as a separate line, and positions are shown as markers if `show_points` is True.
-        
+
+    Key options now include:
+      - color_by: any column in `data` (e.g., 'ship_type', 'flagname', 'track_id', 'time_bin')
+      - date_from/date_to: inclusive datetime range filters
+      - ship_types/flags: categorical filters (if columns exist)
     """
+    # --- Colonnes canoniques (réutilise la Partie 1) ---
     cols = resolve_geo_time_cols(data)
-    df = cols["_df"]  # cleaned DataFrame with standard columns
+    df = cols["_df"]  # DataFrame standardisé (latitude/longitude/date_time_utc)
     lat, lon, tcol = cols["lat"], cols["lon"], cols["time"]
 
-    # optional filtering by track_id if present
+    # --- Casting souple des bornes temporelles ---
+    if date_from is not None and not pd.api.types.is_datetime64_any_dtype(pd.Series([date_from])):
+        date_from = pd.to_datetime(date_from, errors="coerce")
+    if date_to is not None and not pd.api.types.is_datetime64_any_dtype(pd.Series([date_to])):
+        date_to = pd.to_datetime(date_to, errors="coerce")
+
+    # --- Filtres intégrés (facultatifs) ---
+    # 1) Tracks
     track_col = first_present(df, TRACK_ID_CANDS)
     if track_col and track_ids is not None:
         df = df[df[track_col].isin(set(track_ids))].copy()
 
+    # 2) Fenêtre temporelle
+    if date_from is not None:
+        df = df[df[tcol] >= date_from]
+    if date_to is not None:
+        df = df[df[tcol] <= date_to]
+
+    # 3) Types de navire
+    if ship_types is not None and "ship_type" in df.columns:
+        df = df[df["ship_type"].isin(set(ship_types))]
+
+    # 4) Pavillons
+    if flags is not None and "flagname" in df.columns:
+        df = df[df["flagname"].isin(set(flags))]
+
+    # Si plus de données après filtre : on renvoie une figure vide mais valide
+    if df.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title=title or "ASTD Ship Positions / Tracks (no data after filtering)",
+            height=height,
+            margin=dict(l=0, r=0, t=60, b=0),
+        )
+        return fig
+
+    # --- Logic for color_by ---
+    # color_by accepte n’importe quelle colonne existante (ex: 'ship_type', 'flagname', 'track_id').
+    # Si la colonne n’existe pas, on l’ignore proprement.
+    use_color = color_by if (color_by is not None and color_by in df.columns) else None
+
+    # Exemple d’enrichissement léger pour un color_by temporel
+    if use_color is None and color_by is not None:
+        # color_by demandé mais la colonne n’existe pas : cas spécial 'time_bin'
+        if color_by == "time_bin":
+            # binning horaire simple (HH:00)
+            df = df.copy()
+            df["time_bin"] = df[tcol].dt.strftime("%Y-%m-%d %H:00")
+            use_color = "time_bin"
+        # sinon: on ignore (pas d’erreur)
+
+    # --- Figure ---
     fig = go.Figure()
 
+    # Points avec horodatage
     if show_points:
         fig.add_trace(go.Scattermapbox(
-            lat=df[lat],
-            lon=df[lon],
+            lat=df[lat], lon=df[lon],
             mode="markers",
             marker={"size": 5},
             text=df[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
-            hovertemplate="<b>%{text}</b><br>Lat: %{lat:.4f}  Lon: %{lon:.4f}<extra></extra>",
+            # Si use_color renseigné, on passe la valeur en customdata pour l’afficher dans le hover
+            customdata=None if use_color is None else df[[use_color]].to_numpy(),
+            hovertemplate=(
+                "<b>Date/Heure:</b> %{text}"
+                "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
+                + (f"<br><b>{use_color}:</b> %{{customdata[0]}}" if use_color else "")
+                + "<extra></extra>"
+            ),
             name="Positions",
         ))
 
-    # lines by track if we have the column
+    # Lignes par track si la colonne track est disponible
     if track_col:
         df_sorted = df.sort_values([track_col, tcol])
+        # Si color_by == track_id, chaque ligne aura son nom (legend) différent.
         for track, g in df_sorted.groupby(track_col):
             fig.add_trace(go.Scattermapbox(
-                lat=g[lat],
-                lon=g[lon],
+                lat=g[lat], lon=g[lon],
                 mode="lines",
                 line={"width": line_width},
                 name=f"Track {track}",
                 hoverinfo="skip",
             ))
 
+    # --- Layout / centrage ---
     fig.update_layout(
         mapbox_style=map_style,
         mapbox_zoom=(zoom if zoom is not None else 2.7),
@@ -90,7 +142,9 @@ def plot_ship_tracks(
         margin=dict(l=0, r=0, t=60, b=0),
         legend=dict(orientation="h", yanchor="bottom", y=0.01, xanchor="left", x=0.01),
     )
+
     return fig
+
 
 
 def plot_individual_track(
@@ -194,15 +248,16 @@ def plot_individual_track(
 
     else:
         # One polyline for the entire track
-        g = pos.sort_values(tcol)
-        fig.add_trace(go.Scattermapbox(
-            lat=g[lat],
-            lon=g[lon],
-            mode="lines+markers",
-            marker={"size": 4},
-            name=f"Track {track_id}",
-            hoverinfo="skip",
-        ))
+        pos_sorted = pos.sort_values([seg_col_pos, tcol])
+        for seg, g in pos_sorted.groupby(seg_col_pos):
+            fig.add_trace(go.Scattermapbox(
+                lat=g[lat],
+                lon=g[lon],
+                mode="lines",               # pas de markers pour garder un rendu "global"
+                line={"width": 2},          # même style pour tous les segments
+                name=f"Segment {seg}",      # tu peux mettre name="" pour alléger la légende
+                hoverinfo="skip",
+            ))
 
     # Layout / centering
     fig.update_layout(

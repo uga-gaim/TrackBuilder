@@ -29,12 +29,12 @@ from track_builder.visualization.visualizer import (
     plot_individual_track
 )
 
-from track_builder import main
+from track_builder.main import build_track_table
 
 __all__ = [
     "load_astd_data",
     "load_astd_monthly",
     "plot_ship_tracks",
     "plot_individual_track",
-    "main",
+    "build_track_table",
 ]
