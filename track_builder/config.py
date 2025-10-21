@@ -64,3 +64,5 @@ MAPBOX_STYLE_ALIASES: Dict[str, str] = {
     "osm": "open-street-map",
     "openstreetmap": "open-street-map",
 }
+
+MAPBOX_TOKEN = "dhdddddd"

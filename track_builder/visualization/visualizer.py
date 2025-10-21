@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Iterable, Optional, Union, Literal
+from typing import Iterable, Optional, Union, Literal, Dict, Any, Sequence
 import pandas as pd
 
 from plotly import graph_objects as go
@@ -9,184 +9,195 @@ from track_builder.core.vis_helpers import (
     first_present,
     TRACK_ID_CANDS,
     SEGMENT_ID_CANDS,
-    MONTH_CANDS, resolve_map_style, discrete_palette, is_continuous,
+    MONTH_CANDS, resolve_map_style,
+    build_color_spec,
+    get_lat_lon_time_cols,
+    get_track_col,
+    ensure_datetime, get_mapbox_token, build_hover_customdata
 )
 
 POSITION_SEGMENT_CANDS = ("shipid", "segment_id")
 
 
 def plot_ship_tracks(
-        data: pd.DataFrame,
-        track_ids: Optional[Iterable[Union[str, int]]] = None,
-        *,
-
-        color_by: Optional[str] = None,
-        color_mode: Literal["auto","categorical","continuous"] = "auto",  # NEW
-        color_lines: bool = False,
-        date_from: Optional[pd.Timestamp] = None,
-        date_to: Optional[pd.Timestamp] = None,
-        ship_types: Optional[Iterable[str]] = None,
-        flags: Optional[Iterable[str]] = None,
-
-        show_points: bool = True,
-        line_width: float = 2.0,
-        map_style: str = "open-street-map",
-        title: Optional[str] = None,
-        height: int = 720,
-        zoom: Optional[float] = None,
+    df: pd.DataFrame,
+    track_ids: Optional[Sequence[str]] = None,
+    *,
+    color_by: Optional[str] = None,
+    color_mode: Literal["auto", "categorical", "continuous"] = "auto",
+    color_lines: bool = False,
+    max_categories: int = 20,
+    show_points: bool = False,
+    map_style: Optional[str] = None,
+    title: Optional[str] = None,
+    date_from: Optional[pd.Timestamp] = None,
+    date_to: Optional[pd.Timestamp] = None,
+    ship_types: Optional[Sequence[str]] = None,
+    flags: Optional[Sequence[str]] = None,
+    height: int = 650,
+    zoom: Optional[float] = None,
+    center: Optional[Dict[str, float]] = None,
+    extra_cols_priority: Optional[Sequence[str]] = None,  # NEW
 ) -> go.Figure:
     """
-    Plots ship tracks and positions on an interactive map using Plotly.
+    Visualization of ASTD trajectories/positions.
 
-    Key options now include:
-      - color_by: any column in `data` (e.g., 'ship_type', 'flagname', 'track_id', 'time_bin')
-      - date_from/date_to: inclusive datetime range filters
-      - ship_types/flags: categorical filters (if columns exist)
+    Main parameters:
+      - color_by: column used for coloring
+      - color_mode: 'auto' | 'categorical' | 'continuous'
+      - color_lines: also color lines when categorical
+      - max_categories: upper bound on number of categories (the rest → 'Other')
+      - extra_cols_priority: columns to include in the hover (desired order),
+        e.g. ('astd_cat','astd_cat','flagname','shipid').
     """
-    # --- Standardization : geo + time columns ---
-    cols = resolve_geo_time_cols(data)
-    df = cols["_df"]
-    lat, lon, tcol = cols["lat"], cols["lon"], cols["time"]
+    if df is None or len(df) == 0:
+        return go.Figure()
 
-    # date_from/date_to conversion if necessary
-    if date_from is not None and not pd.api.types.is_datetime64_any_dtype(pd.Series([date_from])):
-        date_from = pd.to_datetime(date_from, errors="coerce")
-    if date_to is not None and not pd.api.types.is_datetime64_any_dtype(pd.Series([date_to])):
-        date_to = pd.to_datetime(date_to, errors="coerce")
+    # columns lat/lon/time
+    lat, lon, tcol = get_lat_lon_time_cols(df)
+    df = ensure_datetime(df, tcol)
 
-    # --- Filtering ---
-    # 1) Track IDs
-    track_col = first_present(df, TRACK_ID_CANDS)
-    if track_col and track_ids is not None:
-        df = df[df[track_col].isin(set(track_ids))].copy()
-
-    # 2) Date range
+    # Simple filters
+    work = df
     if date_from is not None:
-        df = df[df[tcol] >= date_from]
+        work = work[work[tcol] >= pd.to_datetime(date_from, utc=True)]
     if date_to is not None:
-        df = df[df[tcol] <= date_to]
+        work = work[work[tcol] <= pd.to_datetime(date_to, utc=True)]
+    if ship_types:
+        if "astd_cat" in work.columns:
+            work = work[work["astd_cat"].isin(ship_types)]
+    if flags:
+        for flag_col in ("flagname", "flag", "flag_name"):
+            if flag_col in work.columns:
+                work = work[work[flag_col].isin(flags)]
+                break
+    track_col = get_track_col(work)
+    if track_ids and track_col:
+        work = work[work[track_col].isin(track_ids)]
 
-    # 3) Ship types
-    if ship_types is not None and "ship_type" in df.columns:
-        df = df[df["ship_type"].isin(set(ship_types))]
+    # TTemporal sorting (useful for lines)
+    work = work.sort_values(tcol)
 
-    # 4) Flags
-    if flags is not None and "flagname" in df.columns:
-        df = df[df["flagname"].isin(set(flags))]
+    # Color specification
+    color_spec = build_color_spec(
+        work, color_by, mode=color_mode, max_categories=max_categories, colorscale="Viridis"
+    )
+    use_color = color_by if color_spec["enabled"] else None
 
-    # if no data after filtering : empty figure with message
-    if df.empty:
-        fig = go.Figure()
-        fig.update_layout(
-            mapbox_style=resolve_map_style(map_style),
-            title=title or "ASTD Ship Positions / Tracks (no data after filtering)",
-            height=height,
-            margin=dict(l=0, r=0, t=60, b=0),
-        )
-        return fig
-
-    # --- Logic for color_by ---
-    # Default: use color_by if present in df.columns
-    use_color = color_by if (color_by is not None and color_by in df.columns) else None
-
-    # Special case: time_bin
-    if use_color is None and color_by is not None:
-        # color_by by time bins
-        if color_by == "time_bin":
-            # simple trim to hourly bins
-            df = df.copy()
-            df["time_bin"] = df[tcol].dt.strftime("%Y-%m-%d %H:00")
-            use_color = "time_bin"
-        # else : skip silently
-
-    # --- Figure ---
     fig = go.Figure()
 
-    # Points avec horodatage
+    # --------- LINES ----------
+    if track_col and track_col in work.columns:
+        color_map = color_spec["color_map"] if (
+            color_spec["enabled"] and not color_spec["is_cont"] and color_lines
+        ) else None
+
+        for track_id, grp in work.groupby(track_col, sort=False):
+            line_kwargs: Dict[str, Any] = {}
+            if color_map and use_color in grp.columns:
+                cat_val = str(color_spec["series"].loc[grp.index].iloc[0])
+                line_kwargs = {"line": {"color": color_map.get(cat_val, "#444")}}
+            fig.add_trace(go.Scattermapbox(
+                lat=grp[lat],
+                lon=grp[lon],
+                mode="lines",
+                name=f"Track {track_id}",
+                hoverinfo="skip",
+                **line_kwargs
+            ))
+
+    # --------- POINTS ----------
     if show_points:
-        if use_color is not None and use_color in df.columns:
-            series = df[use_color]
-            if is_continuous(series):
-                # Single trace with coloraxis and a colorbar
+        # Prepare hover info (customdata + suffix) based on actual columns present
+        cdata_all, suffix_all, _ = build_hover_customdata(work, extra_cols_priority)
+
+        if color_spec["enabled"]:
+            if color_spec["is_cont"]:
                 fig.add_trace(go.Scattermapbox(
-                    lat=df[lat], lon=df[lon],
+                    lat=work[lat], lon=work[lon],
                     mode="markers",
-                    marker={"size": 6, "color": series, "coloraxis": "coloraxis"},
-                    text=df[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    marker={"size": 6, "color": color_spec["series"], "coloraxis": "coloraxis"},
+                    text=work[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    customdata=cdata_all,
                     hovertemplate=(
                         "<b>Date/Heure:</b> %{text}"
                         "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
                         f"<br><b>{use_color}:</b> %{{marker.color}}"
+                        f"{suffix_all}"
                         "<extra></extra>"
                     ),
                     name="Positions",
                 ))
-                fig.update_layout(coloraxis=dict(colorbar_title=use_color))
+                fig.update_layout(coloraxis=color_spec["coloraxis_kwargs"])
             else:
-                # Discrete categories: one trace per category with fixed color and legend entries
-                cats = [c for c in series.astype('category').cat.categories.tolist() if pd.notna(c)]
-                palette = discrete_palette(len(cats))
-                for cat, col in zip(cats, palette):
-                    mask = series.astype('object') == cat
+                cats = color_spec["cats"]
+                color_map = color_spec["color_map"]
+                s = color_spec["series"]  # other col with category per point
+
+                # loop by category → customdata/suffix calculated on the subsample
+                for cat in cats:
+                    mask = (s == cat)
                     if not mask.any():
                         continue
-                    df_cat = df[mask]
+                    df_cat = work.loc[mask]
+                    cdata, suffix, _ = build_hover_customdata(df_cat, extra_cols_priority)
+
                     fig.add_trace(go.Scattermapbox(
                         lat=df_cat[lat], lon=df_cat[lon],
                         mode="markers",
-                        marker={"size": 6, "color": col},
+                        marker={"size": 6, "color": color_map[cat]},
                         text=df_cat[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        customdata=cdata,
                         hovertemplate=(
                             "<b>Date/Heure:</b> %{text}"
                             "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
                             f"<br><b>{use_color}:</b> {cat}"
+                            f"{suffix}"
                             "<extra></extra>"
                         ),
                         name=f"{use_color} = {cat}",
                     ))
         else:
-            # No color_by provided: single neutral layer
+            # Without color_by → a single layer of points
             fig.add_trace(go.Scattermapbox(
-                lat=df[lat], lon=df[lon],
+                lat=work[lat], lon=work[lon],
                 mode="markers",
                 marker={"size": 5},
-                text=df[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
+                text=work[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
+                customdata=cdata_all,
                 hovertemplate=(
                     "<b>Date/Heure:</b> %{text}"
                     "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
+                    f"{suffix_all}"
                     "<extra></extra>"
                 ),
                 name="Positions",
             ))
 
-    # line for tracks if track_id is present
-    if track_col:
-        df_sorted = df.sort_values([track_col, tcol])
-        # one trace per track
-        for track, g in df_sorted.groupby(track_col):
-            fig.add_trace(go.Scattermapbox(
-                lat=g[lat], lon=g[lon],
-                mode="lines",
-                line={"width": line_width},
-                name=f"Track {track}",
-                hoverinfo="skip",
-            ))
+    # render map 
+    if center is None:
+        center = {"lat": float(work[lat].median()), "lon": float(work[lon].median())}
+    if zoom is None:
+        zoom = 2.5
 
-    # Layout / centering
-    fig.update_layout(
-        coloraxis=dict(
-            colorbar_title=use_color,
-            colorscale="Viridis"
-        ),
-        mapbox_style=resolve_map_style(map_style),
-        mapbox_zoom=(zoom if zoom is not None else 2.7),
-        mapbox_center={"lat": float(df[lat].median()), "lon": float(df[lon].median())},
+    style = resolve_map_style(map_style)
+    layout_kwargs = dict(
+        mapbox_style=style,
+        mapbox_zoom=zoom,
+        mapbox_center=center,
         height=height,
         title=title or "ASTD Ship Positions / Tracks",
-        margin=dict(l=0, r=0, t=60, b=0),
         legend=dict(orientation="h", yanchor="bottom", y=0.01, xanchor="left", x=0.01),
+        margin=dict(l=0, r=0, t=60, b=0),
     )
+    if style != "open-street-map":
+        tok = get_mapbox_token()
+        if tok:
+            layout_kwargs["mapbox_accesstoken"] = tok
+        else:
+            layout_kwargs["mapbox_style"] = "open-street-map"
 
+    fig.update_layout(**layout_kwargs)
     return fig
 
 
