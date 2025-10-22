@@ -46,5 +46,23 @@ COLMAP: Dict[str, str] = {
     "iceclass":     "iceclass",
     "sizegroup_gt": "sizegroup_gt",
 }
+
+
 STR_COLS = ("astd_cat", "flagname", "iceclass", "sizegroup_gt")
 DATE_CANDS = ("date_time_utc", "datetime_utc", "timestamp")
+
+
+# For visualization defaults
+
+MAPBOX_STYLE_ALIASES: Dict[str, str] = {
+    "satellite": "satellite-streets",
+    "streets": "streets",
+    "light": "light",
+    "dark": "dark",
+    "outdoors": "outdoors",
+    "terrain": "outdoors",
+    "osm": "open-street-map",
+    "openstreetmap": "open-street-map",
+}
+
+MAPBOX_TOKEN = "dhdddddd"
