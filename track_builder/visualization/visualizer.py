@@ -24,7 +24,7 @@ def plot_ship_tracks(
     track_ids: Optional[Sequence[str]] = None,
     *,
     color_by: Optional[str] = None,
-    color_mode: Literal["auto", "categorical", "continuous"] = "auto",
+    color_mode: Literal["auto", "categorical", "continuous"] = "categorical",
     color_lines: bool = False,
     max_categories: int = 20,
     show_points: bool = False,
@@ -69,7 +69,8 @@ def plot_ship_tracks(
     if flags:
         for flag_col in ("flagname", "flag", "flag_name"):
             if flag_col in work.columns:
-                work = work[work[flag_col].isin(flags)]
+                flags_lower = {f.lower() for f in flags}
+                work = work[work[flag_col].astype(str).str.lower().isin(flags_lower)]
                 break
     track_col = get_track_col(work)
     if track_ids and track_col:
@@ -109,7 +110,7 @@ def plot_ship_tracks(
     # --------- POINTS ----------
     if show_points:
         # Prepare hover info (customdata + suffix) based on actual columns present
-        cdata_all, suffix_all, _ = build_hover_customdata(work, extra_cols_priority)
+        cdata_all, suffix_all, _ = build_hover_customdata(work, extra_cols_priority, color_by=color_by)
 
         if color_spec["enabled"]:
             if color_spec["is_cont"]:
@@ -120,7 +121,7 @@ def plot_ship_tracks(
                     text=work[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
                     customdata=cdata_all,
                     hovertemplate=(
-                        "<b>Date/Heure:</b> %{text}"
+                        "<b>Date/Hour:</b> %{text}"
                         "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
                         f"<br><b>{use_color}:</b> %{{marker.color}}"
                         f"{suffix_all}"
@@ -140,7 +141,7 @@ def plot_ship_tracks(
                     if not mask.any():
                         continue
                     df_cat = work.loc[mask]
-                    cdata, suffix, _ = build_hover_customdata(df_cat, extra_cols_priority)
+                    cdata, suffix, _ = build_hover_customdata(df_cat, extra_cols_priority, color_by=color_by)
 
                     fig.add_trace(go.Scattermapbox(
                         lat=df_cat[lat], lon=df_cat[lon],
@@ -149,7 +150,7 @@ def plot_ship_tracks(
                         text=df_cat[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
                         customdata=cdata,
                         hovertemplate=(
-                            "<b>Date/Heure:</b> %{text}"
+                            "<b>Date/Hour:</b> %{text}"
                             "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
                             f"<br><b>{use_color}:</b> {cat}"
                             f"{suffix}"
@@ -166,7 +167,7 @@ def plot_ship_tracks(
                 text=work[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
                 customdata=cdata_all,
                 hovertemplate=(
-                    "<b>Date/Heure:</b> %{text}"
+                    "<b>Date/Hour:</b> %{text}"
                     "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
                     f"{suffix_all}"
                     "<extra></extra>"
@@ -294,7 +295,7 @@ def plot_individual_track(
                 text=g[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
                 hovertemplate=(
                         "<b>Segment:</b> " + str(seg) +
-                        "<br><b>Date/Heure:</b> %{text}"
+                        "<br><b>Date/hour:</b> %{text}"
                         "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
                         "<extra></extra>"
                 ),
