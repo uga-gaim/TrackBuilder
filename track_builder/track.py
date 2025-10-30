@@ -25,12 +25,12 @@ Internal dependencies:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Literal, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 
-# On ré‑utilise les briques éprouvées de track_v0.py
+# Reuse proven building blocks from track_v0.py
 from track_builder import track_v0 as _core
 from track_builder.core.track_helpers import haversine_km, to_ts
 from track_builder.config import _LIT_CAPS_KMH, MatchingStrategy, _SCORE_THRESHOLDS, _LIMIT_MULTIPLIERS
@@ -38,38 +38,38 @@ from track_builder.config import _LIT_CAPS_KMH, MatchingStrategy, _SCORE_THRESHO
 
 @dataclass
 class BuildOptions:
-    max_time_gap_hours: int = 96      # fenêtre temporelle (heures)
-    max_distance_km: int = 1200       # fenêtre spatiale (km)
-    min_track_length: int = 1         # #segments min pour garder un track
+    max_time_gap_hours: int = 96      # temporal window (hours)
+    max_distance_km: int = 1200       # spatial window (km)
+    min_track_length: int = 1         # min #segments to keep a track
     matching_strategy: MatchingStrategy = "conservative"
-    # paramètres du score
+    # scoring parameters
     w_time: float = 0.4
     w_dist: float = 0.4
     w_speed: float = 0.2
     gap_days_no_penalty: float = 3.0
     gap_penalty_per_day: float = 0.05
-    return_logs: bool = False         # si True, on renvoie (result_df, logs_df)
-    speed_margin: float = 1.3        # marge sur vitesse typique pour filtrage
+    return_logs: bool = False         # if True, return (result_df, logs_df)
+    speed_margin: float = 1.3        # margin on typical speed for filtering
 # =====================================================================
-# (i) Préparation des segments
+# (i) Segment preparation
 # =====================================================================
 
 def _prepare_segments(astd_data: pd.DataFrame) -> pd.DataFrame:
-    """Nettoie et résume les points ASTD en segments mensuels via `_core`.
-    Exige que `get_segment_summaries` retourne au minimum les colonnes:
+    """Cleans and summarizes ASTD points into monthly segments via `_core`.
+    Requires `get_segment_summaries` to return at least the following columns:
       ['shipid','month','start_time','end_time','start_lat','start_lon','end_lat','end_lon','astd_cat']
-    Si `month` n'est pas présent en entrée brute, `_core.clean_data` / `_core.get_segment_summaries`
-    doivent l'ajouter; sinon on peut l'inférer depuis `date_time_utc` (AAAA‑MM).
+    If `month` is not present in raw input, `_core.clean_data` / `_core.get_segment_summaries`
+    must add it; otherwise it can be inferred from `date_time_utc` (YYYY-MM).
     """
     data = _core.clean_data(astd_data)
     if len(data) == 0:
         return pd.DataFrame()
     segs = _core.get_segment_summaries(data)
-    # normalisation minimale
+    # normalize and checks
     needed = {"shipid","month","start_time","end_time","start_lat","start_lon","end_lat","end_lon"}
     missing = needed - set(segs.columns)
     if missing:
-        raise ValueError(f"Colonnes segments manquantes (résumé): {missing}")
+        raise ValueError(f"Missing segment columns (summary): {missing}")
     # cast temps
     segs = segs.copy()
     segs['start_time'] = to_ts(segs['start_time'])
@@ -77,17 +77,68 @@ def _prepare_segments(astd_data: pd.DataFrame) -> pd.DataFrame:
     return segs.sort_values('start_time').reset_index(drop=True)
 
 # =====================================================================
-# Vitesses typiques (data‑driven)
+# Typical speeds (data‑driven)
 # =====================================================================
 
 def _compute_typical_speeds_from_data(segments: pd.DataFrame) -> Dict[str, float]:
-    """Q90 des vitesses de segments par `astd_cat`, borné par _LIT_CAPS_KMH.
-    Si `astd_cat` manquant → retourne une clé `_global`.
+    """
+    Compute typical (90th-percentile) segment speeds from raw segment data.
+    This function derives representative speeds (in km/h) from a table of segments by
+    computing the 90th percentile (Q90) of per-segment speeds and applying sensible
+    clipping rules. It is robust to missing precomputed distance/duration columns and
+    performs several filters to remove invalid or absurd values.
+    Parameters
+    ----------
+    segments : pandas.DataFrame
+        DataFrame containing segment records. Expected columns (at minimum):
+          - start_lat, start_lon, end_lat, end_lon
+          - start_time (dtype datetime-like), end_time (dtype datetime-like)
+        Optional columns that will be used if present:
+          - distance_km : float — precomputed segment distance in kilometres
+          - duration_h  : float — precomputed segment duration in hours
+          - astd_cat    : category or string — activity/category used to group speeds
+        If distance_km is missing, distance is computed with haversine_km on the
+        start/end coordinates. If duration_h is missing, it is computed from
+        (end_time - start_time) in hours.
+    Returns
+    -------
+    dict[str, float]
+        Mapping from category (lowercased string) to a typical speed in km/h.
+        - If the input has no 'astd_cat' column, returns a single entry with key
+          '_global' containing the clipped global Q90 speed.
+        - If 'astd_cat' is present, returns one key per distinct category
+          (converted to str and lowercased).
+        - If there are no valid segments after filtering, returns an empty dict.
+    Behavior and filtering
+    ----------------------
+    1. A working copy of the input DataFrame is used (original is not modified).
+    2. distance_km and duration_h are computed if absent (see Parameters).
+    3. Rows with NaN distance_km or duration_h, or with duration_h <= 0, are dropped.
+    4. Per-segment speed seg_v_kmh = distance_km / duration_h is computed.
+    5. Speeds above 110 km/h are discarded as absurd.
+    6. The 90th percentile (quantile 0.90) of seg_v_kmh is computed per category.
+       - When grouping by astd_cat, categories are converted to string and lowercased
+         before grouping, so returned keys are lowercase strings.
+    7. Clipping rules:
+       - For per-category values: result = min(max(8.0, q90), cap), where cap =
+         _LIT_CAPS_KMH.get(category, 30.0).
+       - For the global value (no astd_cat column): result = min(max(8.0, q90), 35.0).
+    Notes
+    -----
+    - The function returns floats (km/h) and uses a lower bound of 8.0 km/h to avoid
+      unrealistically low typical speeds.
+    - Category-specific caps come from the module-level mapping _LIT_CAPS_KMH;
+      categories not present in that mapping default to a 30 km/h cap (global uses 35).
+    - No exceptions are raised for missing optional columns; lack of valid data
+      simply results in an empty dict.
+    - The function is robust to empty input DataFrames.
+    Q90 of segment speeds by `astd_cat`, capped by _LIT_CAPS_KMH.
+    If `astd_cat` is missing → returns a `_global` key.
     """
     if segments.empty:
         return {}
     s = segments.copy()
-    # distance/durée approximatives du segment (bout‑à‑bout)
+    # Compute missing distance/duration if needed
     if 'distance_km' not in s.columns:
         s['distance_km'] = haversine_km(s['start_lat'], s['start_lon'], s['end_lat'], s['end_lon'])
     if 'duration_h' not in s.columns:
@@ -97,7 +148,7 @@ def _compute_typical_speeds_from_data(segments: pd.DataFrame) -> Dict[str, float
     if s.empty:
         return {}
     s['seg_v_kmh'] = s['distance_km'] / s['duration_h']
-    s = s[s['seg_v_kmh'] <= 110]  # coupe valeurs absurdes
+    s = s[s['seg_v_kmh'] <= 110]  # filter absurd speeds
 
     if 'astd_cat' not in s.columns:
         q90 = float(s['seg_v_kmh'].quantile(0.90))
@@ -111,7 +162,7 @@ def _compute_typical_speeds_from_data(segments: pd.DataFrame) -> Dict[str, float
     return out
 
 # =====================================================================
-# (ii) Génération des candidats + (iii) Scoring
+# (ii) Candidate generation + (iii) scoring
 # =====================================================================
 
 def _generate_and_score_candidates(cur: pd.Series,
@@ -120,20 +171,19 @@ def _generate_and_score_candidates(cur: pd.Series,
                                    speed_lookup: Dict[str,float],
                                    multipliers: Tuple[float,float,float],
                                    logs: List[Dict]) -> pd.DataFrame:
-    """Filtre les candidats en appliquant (temps, distance, vitesse implicite),
-    puis calcule un score simple. Journalise les rejets pour traçabilité.
-    Retourne un DataFrame trié par `score` croissant.
+    """Filter candidates by (time, distance, implied speed), then compute a simple score.
+    Returns a DataFrame sorted by ascending `match_score_simple`.
     """
     tg_mul, dist_mul, spd_mul = multipliers
 
-    # 1) Calculs de base
+    # 1) base calculations
     c = pool.copy()
     c['dt_hours'] = (c['start_time'] - cur['end_time']).dt.total_seconds() / 3600.0
     c['day_gap']  = c['dt_hours'] / 24.0
-    # Dist fin→début
+    # Dist front‑to‑back
     c['distance_km_fd'] = haversine_km(cur['end_lat'], cur['end_lon'], c['start_lat'], c['start_lon'])
 
-    # 2) Filtres + logs
+    # 2) Filtering + logging
     def _log(row, stage, reason):
         logs.append({
             'match_id': f"{cur['shipid']}→{row.get('shipid', row.get('segment_id','?'))}",
@@ -148,7 +198,7 @@ def _generate_and_score_candidates(cur: pd.Series,
             'implied_v_kmh': row.get('implied_v_kmh', np.nan),
         })
 
-    # a) temps non négatif et dans la fenêtre
+    # a) no negative time or too large time gap
     bad_time = (c['dt_hours'] < 0) | (c['dt_hours'] > opts.max_time_gap_hours * tg_mul)
     for _, r in c[bad_time].iterrows():
         _log(r, 'filter', 'time_window')
@@ -156,7 +206,7 @@ def _generate_and_score_candidates(cur: pd.Series,
     if c.empty:
         return c
 
-    # b) distance dans la fenêtre
+    # b) distance within limit
     bad_dist = c['distance_km_fd'] > (opts.max_distance_km * dist_mul)
     for _, r in c[bad_dist].iterrows():
         _log(r, 'filter', 'distance_window')
@@ -164,8 +214,8 @@ def _generate_and_score_candidates(cur: pd.Series,
     if c.empty:
         return c
 
-    # c) vitesse implicite plausible
-    # éviter division par 0
+    # c) plausible implied speed
+    # avoid division by 0
     dt_h = c['dt_hours'].replace(0, np.finfo(float).eps)
     c['implied_v_kmh'] = c['distance_km_fd'] / dt_h
     ship_type = str(cur.get('astd_cat','unknown')).lower()
@@ -179,7 +229,7 @@ def _generate_and_score_candidates(cur: pd.Series,
     if c.empty:
         return c
 
-    # 3) Scoring (plus petit = meilleur)
+    # 3) Scoring (lower is better)
     dt_norm = (c['dt_hours'] / (opts.max_time_gap_hours * max(tg_mul, 1e-9))).clip(upper=1.0)
     dd_norm = (c['distance_km_fd'] / (opts.max_distance_km * max(dist_mul, 1e-9))).clip(upper=1.0)
     vr = (c['implied_v_kmh'] / max(1.0, typical)).clip(upper=2.0)
@@ -187,18 +237,18 @@ def _generate_and_score_candidates(cur: pd.Series,
 
     c['match_score_simple'] = opts.w_time*dt_norm + opts.w_dist*dd_norm + opts.w_speed*vr + penalty
 
-    # 4) Score "amélioré" (si dispo dans _core) — on le considère en *secondaire*
+    # 4) Optional: improved score from _core (may fail)
     try:
         c2 = _core.calculate_improved_match_score(c.copy(), ship_type, cur)
         c['match_score_core'] = c2['match_score'] if 'match_score' in c2 else np.nan
     except Exception:
         c['match_score_core'] = np.nan
 
-    # 5) Seuil par stratégie (sur le score amélioré s'il existe, sinon le simple)
+    # 5) Strategy threshold: prefer the improved core score when available, otherwise fall back to the simple score
     return c.sort_values(['match_score_simple','dt_hours','distance_km_fd']).reset_index(drop=True)
 
 # =====================================================================
-# (iv) Sélection greedy + API publique
+# (iv) Greedy track building
 # =====================================================================
 
 def build_ship_tracks(
@@ -215,10 +265,10 @@ def build_ship_tracks(
     gap_penalty_per_day: float = 0.05,
     return_logs: bool = False,
 ) -> pd.DataFrame | Tuple[pd.DataFrame, pd.DataFrame]:
-    """Connecte des segments en trajectoires continues (day_gap + logs).
+    """Connect segments into continuous tracks using day gaps and structured logs.
 
-    Retour: DataFrame ['month','segment_id','track_id']
-    Si `return_logs=True`, retourne `(result_df, logs_df)`.
+    Returns a DataFrame with columns ['month','segment_id','track_id'].
+    If `return_logs=True`, returns a tuple: (result_df, logs_df).
     """
     # 1) Segments
     segs = _prepare_segments(astd_data)
@@ -226,7 +276,7 @@ def build_ship_tracks(
         res = pd.DataFrame(columns=["month","segment_id","track_id"])
         return (res, pd.DataFrame()) if return_logs else res
 
-    # 2) Paramètres & vitesses typiques
+    # 2) Options + typical speeds
     opts = BuildOptions(
         max_time_gap_hours=max_time_gap_hours,
         max_distance_km=max_distance_km,
@@ -242,14 +292,14 @@ def build_ship_tracks(
 
     speed_lookup = _compute_typical_speeds_from_data(segs)
 
-    # 3) Indexation par mois
+    # 3) Organize by month
     def _mkey(m: str) -> int:
         y, M = str(m).split('-')
         return int(y)*12 + int(M)
     months = sorted(segs['month'].unique(), key=_mkey)
     by_month = {m: segs[segs['month']==m].copy() for m in months}
 
-    # 4) Greedy chronologique
+    # 4) Greedy linking
     logs: List[Dict] = []
     track_id = 0
     assigned: Dict[Tuple[str,str], int] = {}
@@ -265,19 +315,19 @@ def build_ship_tracks(
             tail = cur
 
             # extension
-            for nxt in months[mi+1:mi+2]:  # limiter à mois suivant immédiat
+            for nxt in months[mi+1:mi+2]:  # limit to immediate next month
                 pool = by_month[nxt]
-                # priorité douce même catégorie en tête
+                # soft priority same category first
                 if 'astd_cat' in pool.columns:
                     same = pool['astd_cat'].astype(str).str.lower() == str(tail.get('astd_cat','')).lower()
                     pool = pd.concat([pool.loc[same], pool.loc[~same]], ignore_index=True)
 
-                # génération + score
+                # generation + score
                 cands = _generate_and_score_candidates(tail, pool, opts, speed_lookup, multipliers, logs)
                 if cands.empty:
                     break
 
-                # seuil stratégie — utiliser score_core s'il existe sinon simple
+                # strategy threshold — use match_score_core if available, otherwise fall back to match_score_simple
                 if 'match_score_core' in cands and cands['match_score_core'].notna().any():
                     cands_ok = cands[(cands['match_score_core'] <= score_threshold) | (cands['match_score_core'].isna())]
                 else:
@@ -285,8 +335,8 @@ def build_ship_tracks(
                 if cands_ok.empty:
                     break
 
-                # choisir le 1er non assigné
-                # trier avant de choisir
+                # choose best candidate not already assigned
+                # sort before choosing
                 cands_ok = cands_ok.sort_values(['match_score_simple','dt_hours','distance_km_fd']).reset_index(drop=True)
                 chosen = None
                 for _, r in cands_ok.iterrows():
@@ -302,7 +352,7 @@ def build_ship_tracks(
                 assigned[(chosen['month'], chosen['shipid'])] = track_id
                 tail = chosen
 
-    # 5) Sortie normalisée + filtrage longueur
+    # 5) Output assembly + filtering short tracks
     out = pd.DataFrame([
         {'month': k[0], 'segment_id': k[1], 'track_id': tid} for k, tid in assigned.items()
     ])
@@ -324,23 +374,24 @@ def find_track_candidates(
     *,
     top_n: int = 5,
     matching_strategy: MatchingStrategy = "conservative",
-    max_time_gap_hours: int = 96,
-    max_distance_km: int = 1200,
+    max_time_gap_hours: int = 48,
+    max_distance_km: int = 600,
     w_time: float = 0.4,
     w_dist: float = 0.4,
     w_speed: float = 0.2,
-    gap_days_no_penalty: float = 3.0,
+    gap_days_no_penalty: float = 2.0,
     gap_penalty_per_day: float = 0.05,
     return_logs: bool = False,
 ) -> pd.DataFrame | Tuple[pd.DataFrame, pd.DataFrame]:
-    """Renvoie les meilleurs candidats pour un segment (avec logs optionnels)."""
+    """Find possible next segments for a given segment in a given month.
+    Returns a DataFrame with columns:"""
     segs = _prepare_segments(astd_data)
     segment_id_str = str(segment_id)
     segs = segs.copy()
     segs['shipid_str'] = segs['shipid'].astype(str)
     this = segs[(segs['month'] == month) & (segs['shipid_str'] == segment_id_str)]
     if this.empty:
-        raise ValueError("Segment introuvable pour ce mois.")
+        raise ValueError("Segment ID not found for the specified month.")
     cur = this.iloc[0]
 
     if segs.empty:
@@ -349,7 +400,7 @@ def find_track_candidates(
 
     this = segs[(segs['month']==month) & (segs['shipid']==segment_id)]
     if this.empty:
-        raise ValueError("Segment introuvable pour ce mois.")
+        raise ValueError("Segment ID not found for the specified month.")
     cur = this.iloc[0]
 
     opts = BuildOptions(
@@ -364,7 +415,7 @@ def find_track_candidates(
     multipliers = _LIMIT_MULTIPLIERS[opts.matching_strategy]
     speed_lookup = _compute_typical_speeds_from_data(segs)
 
-    # pool = tous segments dont le start est après fin du courant et dans la fenêtre d'heures
+    # pool = all segments whose start is after the end of the current one and within the time window
     segs = segs.copy()
     segs['dt_hours'] = (segs['start_time'] - cur['end_time']).dt.total_seconds() / 3600.0
     pool = segs[(segs['dt_hours'] >= 0) & (segs['dt_hours'] <= opts.max_time_gap_hours * multipliers[0])]
@@ -372,11 +423,11 @@ def find_track_candidates(
     logs: List[Dict] = []
     cands = _generate_and_score_candidates(cur, pool, opts, speed_lookup, multipliers, logs)
 
-    # tri final et colonnes utiles (uniformiser en 'segment_id')
+    # final formatting
     cands = cands.rename(columns={'shipid': 'segment_id'})
     use_cols = ['month', 'segment_id', 'match_score_simple', 'match_score_core',
                 'distance_km_fd', 'implied_v_kmh', 'dt_hours']
-    # garder seulement les colonnes qui existent (selon score_core dispo ou non)
+    # keep only columns that exist (depending on whether score_core is available or not)
     use_cols = [c for c in use_cols if c in cands.columns]
     cands = cands[use_cols].head(top_n).reset_index(drop=True)
 
