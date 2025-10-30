@@ -4,7 +4,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import sys
 import os
-import main
+import track_v0
 
 # Assuming your ship tracking module is saved as 'ship_tracker.py'
 # from ship_tracker import build_track_table, distance_between_points
@@ -71,7 +71,7 @@ class TestShipTracker(unittest.TestCase):
         ]
         
         df = self.create_test_data(test_tracks)
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         self.assertEqual(len(result), 1)
         self.assertEqual(result.iloc[0]['segment_id'], 'ship_001')
@@ -102,7 +102,7 @@ class TestShipTracker(unittest.TestCase):
         ]
         
         df = self.create_test_data(test_tracks)
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         # Should have 3 segments in 1 track
         self.assertEqual(len(result), 3)
@@ -143,7 +143,7 @@ class TestShipTracker(unittest.TestCase):
         ]
         
         df = self.create_test_data(test_tracks)
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         # Should have 2 segments in 2 different tracks
         self.assertEqual(len(result), 2)
@@ -168,7 +168,7 @@ class TestShipTracker(unittest.TestCase):
         ]
         
         df = self.create_test_data(test_tracks)
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         # Should be 2 separate tracks
         self.assertEqual(len(result), 2)
@@ -199,7 +199,7 @@ class TestShipTracker(unittest.TestCase):
         ]
         
         df = self.create_test_data(test_tracks)
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         # Should connect Jan->Feb->Mar even though data wasn't in order
         self.assertEqual(len(result), 3)
@@ -224,7 +224,7 @@ class TestShipTracker(unittest.TestCase):
         ]
         
         df = self.create_test_data(test_tracks)
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         # Should be 2 separate tracks due to large time gap
         self.assertEqual(len(result), 2)
@@ -250,7 +250,7 @@ class TestShipTracker(unittest.TestCase):
         ]
         
         df = self.create_test_data(test_tracks)
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         # Should have 5 segments in 3 tracks
         self.assertEqual(len(result), 5)
@@ -271,7 +271,7 @@ class TestShipTracker(unittest.TestCase):
         london_lat, london_lon = 51.5074, -0.1278
         paris_lat, paris_lon = 48.8566, 2.3522
         
-        distance = main.distance_between_points(london_lat, london_lon, paris_lat, paris_lon)
+        distance = track_v0.distance_between_points(london_lat, london_lon, paris_lat, paris_lon)
         
         # Should be approximately 344 km (allow 10% error)
         self.assertAlmostEqual(distance, 344, delta=34)
@@ -280,7 +280,7 @@ class TestShipTracker(unittest.TestCase):
         """Test: Empty dataset should return empty result"""
         df = pd.DataFrame(columns=['shipid', 'date_time_utc', 'latitude', 'longitude', 
                                  'astd_cat', 'flagname', 'iceclass', 'sizegroup_gt'])
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         self.assertEqual(len(result), 0)
         self.assertListEqual(list(result.columns), ['month', 'segment_id', 'track_id'])
@@ -293,7 +293,7 @@ class TestShipTracker(unittest.TestCase):
             # Missing other required columns
         })
         
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         self.assertEqual(len(result), 0)
     
     def test_invalid_coordinates(self):
@@ -314,7 +314,7 @@ class TestShipTracker(unittest.TestCase):
         ]
         
         df = self.create_test_data(test_tracks)
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         # Should only have the valid ship
         self.assertEqual(len(result), 1)
@@ -363,7 +363,7 @@ class TestShipTrackerValidation(unittest.TestCase):
             ])
         
         df = pd.DataFrame(test_data)
-        result = main.build_track_table(df)
+        result = track_v0.build_track_table(df)
         
         # Should connect all segments into one track
         unique_tracks = result['track_id'].unique()
@@ -390,7 +390,7 @@ def run_validation_report(test_df):
     print()
     
     # Run the tracking algorithm
-    result = main.build_track_table(test_df)
+    result = track_v0.build_track_table(test_df)
     
     print(f"RESULTS:")
     print(f"- Total tracks created: {result['track_id'].nunique()}")

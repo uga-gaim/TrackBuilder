@@ -31,7 +31,7 @@ from track_builder.visualization.visualizer import (
 
 from track_builder.core.vis_helpers import export_figure
 
-from track_builder.main import build_track_table
+from track_builder.track_v0 import build_track_table
 
 from track_builder.track import (
     build_ship_tracks,

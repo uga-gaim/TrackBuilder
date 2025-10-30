@@ -30,69 +30,11 @@ from typing import Dict, Iterable, List, Literal, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-# On ré‑utilise les briques éprouvées de main.py
-from track_builder import main as _core
+# On ré‑utilise les briques éprouvées de track_v0.py
+from track_builder import track_v0 as _core
+from track_builder.core.track_helpers import haversine_km, to_ts
+from track_builder.config import _LIT_CAPS_KMH, MatchingStrategy, _SCORE_THRESHOLDS, _LIMIT_MULTIPLIERS
 
-# =====================================================================
-# Utilitaires
-# =====================================================================
-
-def _to_ts(x):
-    return pd.to_datetime(x, utc=True, errors="coerce")
-
-
-def _haversine_km(lat1, lon1, lat2, lon2):
-    """Fallback Haversine si _core.haversine_km n'existe pas."""
-    try:
-        return _core.haversine_km(lat1, lon1, lat2, lon2)
-    except Exception:
-        R = 6371.0
-        lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-        dlat = lat2 - lat1
-        dlon = lon2 - lon1
-        a = np.sin(dlat/2)**2 + np.cos(lat1)*np.cos(lat2)*np.sin(dlon/2)**2
-        c = 2*np.arcsin(np.sqrt(a))
-        return R * c
-
-# =====================================================================
-# Plafonds prudents (km/h) — uniquement garde‑fous
-# =====================================================================
-_LIT_CAPS_KMH: Dict[str, float] = {
-    'container ships': 46.0,
-    'bulk carriers': 28.0,
-    'crude oil tankers': 28.0,
-    'oil product tankers': 30.0,
-    'chemical tankers': 30.0,
-    'passenger ships': 37.0,
-    'cruise ships': 37.0,
-    'fishing vessels': 28.0,
-    'refrigerated cargo ships': 46.0,
-    'general cargo ships': 28.0,
-    'gas tankers': 31.0,
-    'ro-ro cargo ships': 33.0,
-    'other service offshore vessels': 24.0,
-    'offshore supply ships': 24.0,
-    'other activities': 24.0,
-    'unknown': 24.0,
-}
-
-# =====================================================================
-# Options & Stratégies
-# =====================================================================
-MatchingStrategy = Literal["conservative", "balanced", "aggressive"]
-
-_SCORE_THRESHOLDS: Dict[MatchingStrategy, float] = {
-    "conservative": 0.40,
-    "balanced": 0.55,
-    "aggressive": 0.70,
-}
-
-_LIMIT_MULTIPLIERS: Dict[MatchingStrategy, Tuple[float, float, float]] = {
-    # (time_gap, distance, speed)
-    "conservative": (0.9, 0.9, 0.85),
-    "balanced": (1.0, 1.0, 1.0),
-    "aggressive": (1.2, 1.2, 1.15),
-}
 
 @dataclass
 class BuildOptions:
@@ -130,8 +72,8 @@ def _prepare_segments(astd_data: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"Colonnes segments manquantes (résumé): {missing}")
     # cast temps
     segs = segs.copy()
-    segs['start_time'] = _to_ts(segs['start_time'])
-    segs['end_time']   = _to_ts(segs['end_time'])
+    segs['start_time'] = to_ts(segs['start_time'])
+    segs['end_time']   = to_ts(segs['end_time'])
     return segs.sort_values('start_time').reset_index(drop=True)
 
 # =====================================================================
@@ -147,7 +89,7 @@ def _compute_typical_speeds_from_data(segments: pd.DataFrame) -> Dict[str, float
     s = segments.copy()
     # distance/durée approximatives du segment (bout‑à‑bout)
     if 'distance_km' not in s.columns:
-        s['distance_km'] = _haversine_km(s['start_lat'], s['start_lon'], s['end_lat'], s['end_lon'])
+        s['distance_km'] = haversine_km(s['start_lat'], s['start_lon'], s['end_lat'], s['end_lon'])
     if 'duration_h' not in s.columns:
         s['duration_h'] = (s['end_time'] - s['start_time']).dt.total_seconds() / 3600.0
     s = s.dropna(subset=['distance_km','duration_h'])
@@ -189,7 +131,7 @@ def _generate_and_score_candidates(cur: pd.Series,
     c['dt_hours'] = (c['start_time'] - cur['end_time']).dt.total_seconds() / 3600.0
     c['day_gap']  = c['dt_hours'] / 24.0
     # Dist fin→début
-    c['distance_km_fd'] = _haversine_km(cur['end_lat'], cur['end_lon'], c['start_lat'], c['start_lon'])
+    c['distance_km_fd'] = haversine_km(cur['end_lat'], cur['end_lon'], c['start_lat'], c['start_lon'])
 
     # 2) Filtres + logs
     def _log(row, stage, reason):

@@ -214,7 +214,7 @@ def plot_individual_track(
 ) -> go.Figure:
     """
     Detailed view of a single track, compatible with the table produced by main.build_track_table().
-    Assumptions (from previous main.py):
+    Assumptions (from previous track_v0.py):
       - track_table contains at least: 'track_id' and 'segment_id' (or equivalents)
       - astd_data (positions) often contains 'shipid' instead of 'segment_id'
     Therefore, 'segment_id' (track_table) is aligned with 'shipid' (positions) without assuming the same column name.
