@@ -136,7 +136,7 @@ def quality_filter(df: pd.DataFrame, threshold_minutes: int) -> pd.DataFrame:
         return df
 
     tmp = df.copy()
-    tmp["_month"] = tmp["date_time_utc"].dt.to_period("M").astype(str)
+    tmp["_month"] = tmp["date_time_utc"].dt.strftime("%Y-%m")
     keep = np.zeros(len(tmp), dtype=bool)
 
     for (_, _m), g in tmp.groupby(["shipid", "_month"]):

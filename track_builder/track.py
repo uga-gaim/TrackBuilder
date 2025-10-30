@@ -1,29 +1,26 @@
 """
-Public API — Partie 3 : Track Matching & Building (thin‑wrapper + day_gap + logs)
-===============================================================================
+Objective
+---------
+Pedagogical refactor into clear layers on top of `track_builder.main` (alias `_core`).
+We explicitly isolate:
+    (i) segment preparation → (ii) candidate generation → (iii) scoring → (iv) greedy selection
+and we **log** every decision/filter with structured logs (`match_id`, `from`, `to`, `stage`, `reason`).
 
-Objectif
---------
-Refactor pédagogique en couches claires au‑dessus de `track_builder.main` (alias `_core`).
-On isole explicitement :
-  (i) préparation des segments → (ii) génération des candidats → (iii) scoring → (iv) sélection greedy
-et on **journalise** chaque décision/filtrage avec des logs structurés (`match_id`, `from`, `to`, `stage`, `reason`).
+Key points
+----------
+- **day_gap** (actual gap in days) replaces heuristic `month_gap`.
+- **Data-driven typical speeds** by category (`astd_cat`) using the 90th percentile of segment speeds,
+    **bounded** by conservative literature caps (km/h) → not an invented list.
+- Simple, readable score: a·Δt_norm + b·Δd_norm + c·speed_ratio + penalty(day_gap > threshold).
+- API compatible with the notebook:
+        - build_ship_tracks(astd_data, **options) → DataFrame['month','segment_id','track_id']
+        - find_track_candidates(segment_id, month, astd_data, top_n=5, **options)
+        - get_track_statistics(track_table, astd_data)
+- Additional option: `return_logs: bool=False` to retrieve a `logs` DataFrame for traceability.
 
-Points clés
------------
-- **day_gap** (écart réel en jours) remplace les heuristiques `month_gap`.
-- **Vitesses typiques data‑driven** par catégorie (`astd_cat`) via **quantile 90%** des vitesses de segments,
-  **bornées** par des plafonds littérature prudents (km/h) → pas de liste inventée.
-- **Score simple** et lisible : a·Δt_norm + b·Δd_norm + c·ratio_vitesse + pénalité(day_gap>seuil).
-- API compatible cahier :
-    - build_ship_tracks(astd_data, **options) → DataFrame['month','segment_id','track_id']
-    - find_track_candidates(segment_id, month, astd_data, top_n=5, **options)
-    - get_track_statistics(track_table, astd_data)
-- Options supplémentaires : `return_logs: bool=False` pour récupérer un DataFrame `logs` de traçabilité.
-
-Dépendances internes :
-- `_core.clean_data`, `_core.get_segment_summaries`, `_core.calculate_candidate_metrics` (pour cohérence projet)
-- `_core.haversine_km` si disponible ; sinon fallback Haversine local.
+Internal dependencies:
+- `_core.clean_data`, `_core.get_segment_summaries`, `_core.calculate_candidate_metrics` (for project consistency)
+- `_core.haversine_km` if available; otherwise a local Haversine fallback.
 """
 from __future__ import annotations
 
@@ -110,7 +107,7 @@ class BuildOptions:
     gap_days_no_penalty: float = 3.0
     gap_penalty_per_day: float = 0.05
     return_logs: bool = False         # si True, on renvoie (result_df, logs_df)
-
+    speed_margin: float = 1.3        # marge sur vitesse typique pour filtrage
 # =====================================================================
 # (i) Préparation des segments
 # =====================================================================
@@ -231,7 +228,7 @@ def _generate_and_score_candidates(cur: pd.Series,
     c['implied_v_kmh'] = c['distance_km_fd'] / dt_h
     ship_type = str(cur.get('astd_cat','unknown')).lower()
     typical = speed_lookup.get(ship_type, _LIT_CAPS_KMH.get(ship_type, 24.0))
-    max_v = typical * 1.3 * spd_mul
+    max_v = typical * opts.speed_margin * spd_mul
 
     bad_speed = c['implied_v_kmh'] > max_v
     for _, r in c[bad_speed].iterrows():
@@ -326,7 +323,7 @@ def build_ship_tracks(
             tail = cur
 
             # extension
-            for nxt in months[mi+1:]:
+            for nxt in months[mi+1:mi+2]:  # limiter à mois suivant immédiat
                 pool = by_month[nxt]
                 # priorité douce même catégorie en tête
                 if 'astd_cat' in pool.columns:
@@ -347,6 +344,8 @@ def build_ship_tracks(
                     break
 
                 # choisir le 1er non assigné
+                # trier avant de choisir
+                cands_ok = cands_ok.sort_values(['match_score_simple','dt_hours','distance_km_fd']).reset_index(drop=True)
                 chosen = None
                 for _, r in cands_ok.iterrows():
                     k2 = (r['month'], r['shipid'])
