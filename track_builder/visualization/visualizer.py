@@ -85,6 +85,9 @@ def plot_ship_tracks(
     )
     use_color = color_by if color_spec["enabled"] else None
 
+    # delete rows where color_by is NaN
+    work = work[work[use_color].notna()] if use_color else work
+
     fig = go.Figure()
 
     # --------- LINES ----------
