@@ -147,3 +147,10 @@ _LIMIT_MULTIPLIERS: Dict[MatchingStrategy, Tuple[float, float, float]] = {
     "balanced": (1.0, 1.0, 1.0),
     "aggressive": (1.2, 1.2, 1.15),
 }
+
+# ---------------------------
+# Typical speed parameters
+# ---------------------------
+SPEED_TYPICALS_N_PER_DAY = 4        # n speed samples per day
+SPEED_TYPICALS_CLIP_KMH  = 80.0     # clip unrealistic speeds
+SPEED_TYP_MIN_POINTS     = 5        # min samples kept per ship
