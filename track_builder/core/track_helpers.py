@@ -103,9 +103,9 @@ def compute_typical_speeds_by_astd_cat(
     ship_means = ship_means[ship_means['n_samples'] >= min_points_per_ship]
     ship_means = ship_means.merge(ship_cat, on='ship_id', how='left')
 
-    # Agrégation finale: médiane robuste par type
+    # final agg per astd_cat
     out = (ship_means.groupby('astd_cat')
-           .agg(typical_speed_kmh=('mean_speed_kmh', 'median'),
+           .agg(typical_speed_kmh=('mean_speed_kmh', lambda x: x.quantile(0.9)),
                 n_ships_used=('ship_id', 'nunique'))
            .reset_index()
            .sort_values('typical_speed_kmh'))
@@ -129,7 +129,7 @@ def get_all_point_to_point_speeds(
     ----------
     astd_data : pd.DataFrame
         The raw ASTD DataFrame. Must contain:
-        'ship_id', 'date_time_utc', 'astd_cat', 
+        'shipid', 'date_time_utc', 'astd_cat', 
         and speed columns ('dist_nextpoint', 'sec_nextpoint') 
         or coordinates ('latitude', 'longitude').
     n_per_day : int, optional
@@ -151,7 +151,7 @@ def get_all_point_to_point_speeds(
 
     rows = []
     # Group by ship AND day
-    grouped = work.groupby(['ship_id', 'date'])
+    grouped = work.groupby(['shipid', 'date'])
 
     # Use tqdm for a progress bar if available
     try:
@@ -184,16 +184,16 @@ def get_all_point_to_point_speeds(
         if len(v) > n_per_day: 
             v = v.sample(n_per_day, random_state=42)
         
-        rows.append(pd.DataFrame({'ship_id': sid, 'speed_kmh': v.values}))
+        rows.append(pd.DataFrame({'shipid': sid, 'speed_kmh': v.values}))
 
     if not rows:
         return pd.DataFrame(columns=['astd_cat', 'speed_kmh'])
 
     speeds_df = pd.concat(rows, ignore_index=True)
     
-    # Get the category for each ship_id
+    # Get the category for each shipid
     # (Using the first-seen category for each ship)
-    ship_cat_map = work.drop_duplicates('ship_id', keep='first').set_index('ship_id')['astd_cat']
-    speeds_df['astd_cat'] = speeds_df['ship_id'].map(ship_cat_map)
+    ship_cat_map = work.drop_duplicates('shipid', keep='first').set_index('shipid')['astd_cat']
+    speeds_df['astd_cat'] = speeds_df['shipid'].map(ship_cat_map)
 
     return speeds_df[['astd_cat', 'speed_kmh']].dropna()
