@@ -19,10 +19,10 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 def _compute_speed_kmh_between_rows(grp: pd.DataFrame) -> pd.Series:
     """
-    grp: points d'UN ship_id sur UN jour (triés par date_time_utc).
-    Retourne une série de vitesses (km/h) entre points consécutifs, indexée à partir du 2e point.
+    grp: points of a single ship_id for a single day (sorted by date_time_utc).
+    Returns a Series of speeds (km/h) between consecutive points, indexed starting at the 2nd point.
     """
-    # Cas 1: colonnes FTP (dist depuis point précédent et secondes depuis point précédent)
+    # Case 1: use dist_nextpoint/sec_nextpoint if available
     if {'dist_nextpoint', 'sec_nextpoint'}.issubset(grp.columns):
         dist_m = grp['dist_nextpoint'].to_numpy()[1:]
         secs = grp['sec_nextpoint'].to_numpy()[1:]
@@ -51,15 +51,14 @@ def compute_typical_speeds_by_astd_cat(
         min_points_per_ship: int = 5
 ) -> pd.DataFrame:
     """
-    Calcule des vitesses 'typiques' par astd_cat, en 3 niveaux:
-      (1) par ship_id & jour: vitesses entre points consécutifs (échantillon aléatoire n_per_day)
-      (2) par ship_id: moyenne des vitesses > 0
-      (3) par astd_cat: médiane des moyennes ship_id
+    Compute 'typical' speeds by astd_cat in three steps:
+      (1) per ship_id & day: speeds between consecutive points (random sample n_per_day)
+      (2) per ship_id: mean of speeds > 0
+      (3) per astd_cat: 90th percentile of ship-level means
 
-    Colonnes requises: ship_id/shipid, date_time_utc, latitude, longitude, astd_cat.
-    Utilise dist_nextpoint/sec_nextpoint si disponibles (exports FTP).
+    Required columns: ship_id/shipid, date_time_utc, latitude, longitude, astd_cat.
+    Uses dist_nextpoint/sec_nextpoint when available.
     """
-    # Harmonise ship_id
     if 'shipid' in df.columns and 'ship_id' not in df.columns:
         df = df.rename(columns={'shipid': 'ship_id'}).copy()
 
@@ -92,11 +91,11 @@ def compute_typical_speeds_by_astd_cat(
         return pd.DataFrame(columns=['astd_cat', 'typical_speed_kmh', 'n_ships_used'])
 
     speeds = pd.concat(rows, ignore_index=True)
-    # Récupère la catégorie (on prend la première valeur rencontrée pour ce ship)
+
     ship_cat = work.drop_duplicates('ship_id')[['ship_id', 'astd_cat']]
     speeds = speeds.merge(ship_cat, on='ship_id', how='left')
 
-    # Moyenne par ship_id  filtre sur le nb d'échantillons gardés
+    # agg per ship_id
     ship_means = (speeds.groupby('ship_id', as_index=False)
                   .agg(mean_speed_kmh=('speed_kmh', 'mean'),
                        n_samples=('speed_kmh', 'size')))

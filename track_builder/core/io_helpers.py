@@ -136,10 +136,10 @@ def quality_filter(df: pd.DataFrame, threshold_minutes: int) -> pd.DataFrame:
         return df
 
     tmp = df.copy()
-    tmp["_month"] = tmp["date_time_utc"].dt.strftime("%Y-%m")
+    tmp["year_month"] = tmp["date_time_utc"].dt.strftime("%Y-%m")
     keep = np.zeros(len(tmp), dtype=bool)
 
-    for (_, _m), g in tmp.groupby(["shipid", "_month"]):
+    for (_, _m), g in tmp.groupby(["shipid", "year_month"]):
         g = g.sort_values("date_time_utc")
         if len(g) < 2:
             continue
@@ -147,7 +147,7 @@ def quality_filter(df: pd.DataFrame, threshold_minutes: int) -> pd.DataFrame:
         if len(deltas) and deltas.mean() <= threshold_minutes:
             keep[g.index] = True
 
-    return tmp.loc[keep].drop(columns=["_month"])
+    return tmp.loc[keep].drop(columns=["year_month"])
 
 
 def matches_year_month(filename: str, year: int, months: set[int]) -> bool:

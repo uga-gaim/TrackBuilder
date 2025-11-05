@@ -268,7 +268,7 @@ def build_ship_tracks(
             tail = cur
 
             # extension
-            for nxt in months[mi + 1:mi + 2]:  # limit to immediate next month
+            for nxt in months[mi + 1:]:
                 pool = by_month[nxt]
                 # soft priority same category first
                 if 'astd_cat' in pool.columns:
