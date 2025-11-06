@@ -1,8 +1,10 @@
 from __future__ import annotations
 from typing import Iterable, Optional, Union, Literal, Dict, Any, Sequence
 import pandas as pd
+import numpy as np
 
 from plotly import graph_objects as go
+import plotly.express as px
 
 from track_builder.core.vis_helpers import (
     resolve_geo_time_cols,
@@ -24,7 +26,7 @@ def plot_ship_tracks(
     track_ids: Optional[Sequence[str]] = None,
     *,
     color_by: Optional[str] = None,
-    color_mode: Literal["auto", "categorical", "continuous"] = "auto",
+    color_mode: Literal["auto", "categorical", "continuous"] = "categorical",
     color_lines: bool = False,
     max_categories: int = 20,
     show_points: bool = False,
@@ -37,7 +39,7 @@ def plot_ship_tracks(
     height: int = 650,
     zoom: Optional[float] = None,
     center: Optional[Dict[str, float]] = None,
-    extra_cols_priority: Optional[Sequence[str]] = None,  # NEW
+    extra_cols_priority: Optional[Sequence[str]] = None,
 ) -> go.Figure:
     """
     Visualization of ASTD trajectories/positions.
@@ -69,7 +71,8 @@ def plot_ship_tracks(
     if flags:
         for flag_col in ("flagname", "flag", "flag_name"):
             if flag_col in work.columns:
-                work = work[work[flag_col].isin(flags)]
+                flags_lower = {f.lower() for f in flags}
+                work = work[work[flag_col].astype(str).str.lower().isin(flags_lower)]
                 break
     track_col = get_track_col(work)
     if track_ids and track_col:
@@ -83,6 +86,9 @@ def plot_ship_tracks(
         work, color_by, mode=color_mode, max_categories=max_categories, colorscale="Viridis"
     )
     use_color = color_by if color_spec["enabled"] else None
+
+    # delete rows where color_by is NaN
+    work = work[work[use_color].notna()] if use_color else work
 
     fig = go.Figure()
 
@@ -109,7 +115,7 @@ def plot_ship_tracks(
     # --------- POINTS ----------
     if show_points:
         # Prepare hover info (customdata + suffix) based on actual columns present
-        cdata_all, suffix_all, _ = build_hover_customdata(work, extra_cols_priority)
+        cdata_all, suffix_all, _ = build_hover_customdata(work, extra_cols_priority, color_by=color_by)
 
         if color_spec["enabled"]:
             if color_spec["is_cont"]:
@@ -120,7 +126,7 @@ def plot_ship_tracks(
                     text=work[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
                     customdata=cdata_all,
                     hovertemplate=(
-                        "<b>Date/Heure:</b> %{text}"
+                        "<b>Date/Hour:</b> %{text}"
                         "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
                         f"<br><b>{use_color}:</b> %{{marker.color}}"
                         f"{suffix_all}"
@@ -140,7 +146,7 @@ def plot_ship_tracks(
                     if not mask.any():
                         continue
                     df_cat = work.loc[mask]
-                    cdata, suffix, _ = build_hover_customdata(df_cat, extra_cols_priority)
+                    cdata, suffix, _ = build_hover_customdata(df_cat, extra_cols_priority, color_by=color_by)
 
                     fig.add_trace(go.Scattermapbox(
                         lat=df_cat[lat], lon=df_cat[lon],
@@ -149,7 +155,7 @@ def plot_ship_tracks(
                         text=df_cat[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
                         customdata=cdata,
                         hovertemplate=(
-                            "<b>Date/Heure:</b> %{text}"
+                            "<b>Date/Hour:</b> %{text}"
                             "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
                             f"<br><b>{use_color}:</b> {cat}"
                             f"{suffix}"
@@ -166,7 +172,7 @@ def plot_ship_tracks(
                 text=work[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
                 customdata=cdata_all,
                 hovertemplate=(
-                    "<b>Date/Heure:</b> %{text}"
+                    "<b>Date/Hour:</b> %{text}"
                     "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
                     f"{suffix_all}"
                     "<extra></extra>"
@@ -213,32 +219,7 @@ def plot_individual_track(
 ) -> go.Figure:
     """
     Detailed view of a single track, compatible with the table produced by main.build_track_table().
-    Assumptions (from previous main.py):
-      - track_table contains at least: 'track_id' and 'segment_id' (or equivalents)
-      - astd_data (positions) often contains 'shipid' instead of 'segment_id'
-    Therefore, 'segment_id' (track_table) is aligned with 'shipid' (positions) without assuming the same column name.
-
-    Parameters
-    ----------
-    track_id : str|int
-        Identifier of the track to visualize.
-    track_table : pd.DataFrame
-        Table of tracks (e.g., columns ['track_id','segment_id','month']).
-    astd_data : pd.DataFrame
-        Position data already loaded/standardized by Part 1.
-    show_segments : bool
-        If True, draws one polyline per segment (legend = identifier from positions).
-    map_style : str
-        Mapbox/OSM tile style ('open-street-map' does not require a token).
-    height : int
-        Height of the Plotly figure.
-    title : str|None
-        Custom title.
-
-    Returns
-    -------
-    plotly.graph_objects.Figure
-
+    (docstring inchangé)
     """
 
     # Geo + time columns (reuse standardization from Part 1; no I/O re-validations here)
@@ -278,40 +259,102 @@ def plot_individual_track(
             f"Compared via astd_data['{seg_col_pos}'] ∈ track_table['{seg_col_track}']."
         )
 
+    
+    
+    # Create 'yyyymm' column for color mapping
+    pos['yyyymm'] = pos[tcol].dt.strftime('%Y%m')
+
+    # Create the color map
+    unique_months = sorted(pos['yyyymm'].unique())
+    # Use a standard Plotly qualitative color palette
+    color_palette = px.colors.qualitative.Plotly 
+    month_color_map = {}
+    for i, month in enumerate(unique_months):
+        # Cycle through the palette if there are more months than colors
+        month_color_map[month] = color_palette[i % len(color_palette)]
+    
+    # Set to track which months have been added to the legend
+    legend_months_added = set()
+
     # Plotly figure
     fig = go.Figure()
 
-    if show_segments:
-        # One polyline per 'segment' as named in positions (often 'shipid')
-        pos_sorted = pos.sort_values([seg_col_pos, tcol])
-        for seg, g in pos_sorted.groupby(seg_col_pos):
-            fig.add_trace(go.Scattermapbox(
-                lat=g[lat],
-                lon=g[lon],
-                mode="lines+markers",
-                marker={"size": 4},
-                name=str(seg),
-                text=g[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
-                hovertemplate=(
-                        "<b>Segment:</b> " + str(seg) +
-                        "<br><b>Date/Heure:</b> %{text}"
-                        "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
-                        "<extra></extra>"
-                ),
-            ))
+    # Define a visual gap threshold (in hours)
+    MAX_GAP_HOURS_VIS = 24.0  # You can adjust this threshold
 
-    else:
-        # One polyline for the entire track
-        pos_sorted = pos.sort_values([seg_col_pos, tcol])
-        for seg, g in pos_sorted.groupby(seg_col_pos):
-            fig.add_trace(go.Scattermapbox(
-                lat=g[lat],
-                lon=g[lon],
-                mode="lines",  # just lines, no markers
-                line={"width": 2},  # fixed line width
-                name=f"Segment {seg}",  # legend entry
-                hoverinfo="skip",
-            ))
+    # Sort positions by segment, then time, to prepare for gap detection
+    pos_sorted = pos.sort_values([seg_col_pos, tcol]) # pos now has 'yyyymm'
+
+    # Loop over each segment, find gaps, and plot sub-segments
+    for seg, g in pos_sorted.groupby(seg_col_pos):
+        
+        if g.empty:
+            continue
+
+        # Calculate time gaps *within* this segment
+        g = g.sort_values(tcol)
+        time_diffs = g[tcol].diff().dt.total_seconds() / 3600.0
+
+        # Find the .iloc locations (integer positions) where gaps occur
+        gap_ilocs = np.where(time_diffs > MAX_GAP_HOURS_VIS)[0]
+
+        # Split the dataframe 'g' into sub-groups at these locations
+        sub_groups = np.split(g, gap_ilocs)
+
+        # Loop over the sub-groups and plot them individually
+        for i, sub_g in enumerate(sub_groups):
+            
+            # Don't plot empty or single-point dataframes
+            if len(sub_g) < 2: 
+                continue
+                
+            # Get color and legend info for this sub-segment
+            # Use the month of the first point in the sub-segment
+            current_month = sub_g['yyyymm'].iloc[0]
+            current_color = month_color_map.get(current_month, "#808080") # Default to gray
+            
+            # Check if this month is already in the legend
+            show_legend_for_this = (current_month not in legend_months_added)
+            if show_legend_for_this:
+                legend_months_added.add(current_month)
+
+            # Apply original plotting logic based on 'show_segments'
+            if show_segments:
+                fig.add_trace(go.Scattermapbox(
+                    lat=sub_g[lat],
+                    lon=sub_g[lon],
+                    mode="lines+markers",
+                   
+                    marker={"size": 4, "color": current_color},
+                    line={"color": current_color},
+                    # Legend by month
+                    name=current_month,
+                    legendgroup=current_month, # Group traces by month
+                    showlegend=show_legend_for_this, 
+                    text=sub_g[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    hovertemplate=(
+                            # Add month to hover
+                            "<b>Month:</b> " + current_month +
+                            "<br><b>Segment:</b> " + str(seg) +
+                            "<br><b>Date/hour:</b> %{text}"
+                            "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
+                            "<extra></extra>"
+                    ),
+                ))
+            else:
+                # One polyline for the entire track (but broken by gaps)
+                fig.add_trace(go.Scattermapbox(
+                    lat=sub_g[lat],
+                    lon=sub_g[lon],
+                    mode="lines",
+                    #Apply color
+                    line={"width": 2, "color": current_color},
+                    # Legend by month
+                    name=current_month,
+                    legendgroup=current_month,
+                    showlegend=show_legend_for_this,
+                    hoverinfo="skip",
+                ))
 
     # Layout / centering
     fig.update_layout(

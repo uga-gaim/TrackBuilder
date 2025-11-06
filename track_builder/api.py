@@ -29,7 +29,15 @@ from track_builder.visualization.visualizer import (
     plot_individual_track
 )
 
-from track_builder.main import build_track_table
+from track_builder.core.vis_helpers import export_figure
+
+from track_builder.track_v0 import build_track_table
+
+from track_builder.track import (
+    build_ship_tracks,
+    find_track_candidates,
+    get_track_statistics,
+)
 
 __all__ = [
     "load_astd_data",
@@ -37,4 +45,8 @@ __all__ = [
     "plot_ship_tracks",
     "plot_individual_track",
     "build_track_table",
+    "export_figure",
+    "build_ship_tracks",
+    "find_track_candidates",
+    "get_track_statistics",
 ]

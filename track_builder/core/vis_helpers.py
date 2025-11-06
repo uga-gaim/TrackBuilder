@@ -214,6 +214,7 @@ def export_figure(fig: go.Figure, path: Union[str, Path]) -> None:
 def build_hover_customdata(
     df_like: pd.DataFrame,
     extra_cols_priority: Optional[Sequence[str]],
+    color_by: Optional[str] = None,
 ) -> tuple[Optional[np.ndarray], str, list[str]]:
     """
     Builds:
@@ -225,6 +226,12 @@ def build_hover_customdata(
     Missing columns are ignored silently. Values are cast to str.
     """
     default_cols = ['astd_cat', 'shipid', 'flagname']
+
+    if color_by is not None:
+        if extra_cols_priority is not None:
+            extra_cols_priority = [c for c in extra_cols_priority if c != color_by]
+        default_cols = [c for c in default_cols if c != color_by]
+
     if not extra_cols_priority:
         extra_cols_priority = default_cols
 
