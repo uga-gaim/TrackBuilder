@@ -280,7 +280,7 @@ def plot_individual_track(
     fig = go.Figure()
 
     # Define a visual gap threshold (in hours)
-    MAX_GAP_HOURS_VIS = 24.0  # You can adjust this threshold
+    MAX_GAP_HOURS_VIS = 3 # You can adjust this threshold
 
     # Sort positions by segment, then time, to prepare for gap detection
     pos_sorted = pos.sort_values([seg_col_pos, tcol]) # pos now has 'yyyymm'

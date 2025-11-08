@@ -30,9 +30,8 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
-# Reuse proven building blocks from track_v0.py
-from track_builder import track_v0 as _core
-from track_builder.core.track_helpers import haversine_km, to_ts, compute_typical_speeds_by_astd_cat
+from track_builder.core.track_helpers import haversine_km, to_ts, compute_typical_speeds_by_astd_cat, \
+    calculate_improved_match_score, clean_data, get_segment_summaries
 from track_builder.config import (
     _LIT_CAPS_KMH,
     MatchingStrategy,
@@ -71,10 +70,10 @@ def _prepare_segments(astd_data: pd.DataFrame) -> pd.DataFrame:
     If `month` is not present in raw input, `_core.clean_data` / `_core.get_segment_summaries`
     must add it; otherwise it can be inferred from `date_time_utc` (YYYY-MM).
     """
-    data = _core.clean_data(astd_data)
+    data = clean_data(astd_data)
     if len(data) == 0:
         return pd.DataFrame()
-    segs = _core.get_segment_summaries(data)
+    segs = get_segment_summaries(data)
     # normalize and checks
     needed = {"shipid", "month", "start_time", "end_time", "start_lat", "start_lon", "end_lat", "end_lon", "astd_cat"}
     missing = needed - set(segs.columns)
@@ -190,7 +189,7 @@ def _generate_and_score_candidates(cur: pd.Series,
 
     # 4) Optional: improved score from _core (may fail)
     try:
-        c2 = _core.calculate_improved_match_score(c.copy(), ship_type, cur)
+        c2 = calculate_improved_match_score(c.copy(), ship_type, cur)
         c['match_score_core'] = c2['match_score'] if 'match_score' in c2 else np.nan
     except Exception:
         c['match_score_core'] = np.nan

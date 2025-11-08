@@ -71,7 +71,7 @@ def read_csv_auto(path, **kwargs):
     """
     # Semicolon is the most likely separator for ASTD data, so we try it first.
     separators_to_try = [';', ',']
-
+    
     for sep in separators_to_try:
         try:
             # We pass the kwargs (like low_memory=False) to the call to read_csv
