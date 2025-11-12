@@ -426,3 +426,51 @@ def calculate_position_continuity_score(candidates: pd.DataFrame, current_segmen
         scores.append(score)
 
     return np.array(scores)
+
+
+def _norm_str(x):
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return None
+    s = str(x).strip()
+    if s == "" or s.lower() in {"nan", "none"}:
+        return None
+    return s.lower()
+
+def filter_attr_consistency_tolerant(
+    cand_df,
+    cur_row,
+    *,
+    attrs=("flagname","iceclass","astd_cat","sizegroup_gt"),
+    log=None
+):
+    """
+    Tolerant of missing fields:
+      - If the current OR candidate value is missing for a given attribute -> do NOT filter on that attribute.
+      - Otherwise, require strict equality (case- and whitespace-insensitive).
+    """
+    df = cand_df
+    for col in attrs:
+        if col not in df.columns:
+            continue
+
+        cur_v = _norm_str(cur_row.get(col, None))
+        # if cur_v is missing, do not filter on this attribute
+        if cur_v is None:
+            continue
+
+        # normalize candidate values
+        cand_v = df[col].map(_norm_str)
+
+        # only filter where candidate value is known
+        known_mask = cand_v.notna()
+        if known_mask.any():
+            match_mask = (cand_v == cur_v) | (~known_mask)  # tolerate unknowns on candidate side
+            if log is not None:
+                for _, r in df.loc[known_mask & ~match_mask].iterrows():
+                    log(r, "filter", f"{col}_mismatch")
+            df = df.loc[match_mask]
+            if df.empty:
+                return df
+        # if all candidate values are missing -> nothing to do for this attribute
+
+    return df

@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 from track_builder.core.track_helpers import haversine_km, to_ts, compute_typical_speeds_by_astd_cat, \
-    calculate_improved_match_score, clean_data, get_segment_summaries
+    calculate_improved_match_score, clean_data, get_segment_summaries, filter_attr_consistency_tolerant
 from track_builder.config import (
     _LIT_CAPS_KMH,
     MatchingStrategy,
@@ -176,6 +176,13 @@ def _generate_and_score_candidates(cur: pd.Series,
     for _, r in c[bad_speed].iterrows():
         _log(r, 'filter', 'speed_cap')
     c = c[~bad_speed]
+
+    c = filter_attr_consistency_tolerant(
+    c, cur,
+    attrs=("flagname","iceclass","astd_cat","sizegroup_gt"),
+    log=_log  # or None
+    )
+    
     if c.empty:
         return c
 
