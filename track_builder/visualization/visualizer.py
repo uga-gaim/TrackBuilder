@@ -219,12 +219,12 @@ def plot_individual_track(
         extra_cols_priority=None,
         color_by=None,
 ) -> go.Figure:
-    # --- Colonnes de géo/temps côté positions
+    # Visualize a single track with positions from astd_data.
     cols = resolve_geo_time_cols(astd_data)
     df = cols["_df"].copy()
     lat, lon, tcol = cols["lat"], cols["lon"], cols["time"]
 
-    # --- Colonnes-clés disponibles
+    # --- Key columns available
     seg_col_track = first_present(track_table, SEGMENT_ID_CANDS)
     seg_col_pos   = first_present(df,          POSITION_SEGMENT_CANDS)
     track_col     = first_present(track_table, TRACK_ID_CANDS)
@@ -235,35 +235,35 @@ def plot_individual_track(
             f"astd_data[{POSITION_SEGMENT_CANDS}]."
         )
 
-    # --- Sous-table du track et normalisation du mois -> yyyymm
+    # --- Sub-table of the track and normalization of the month -> yyyymm
     tt = track_table[track_table[track_col] == track_id].copy()
     if tt.empty:
         raise ValueError(f"Track '{track_id}' not found in track_table.")
     month_col = first_present(tt, MONTH_CANDS)
     if month_col is None:
         raise KeyError(f"track_table must have a month column in {MONTH_CANDS}.")
-    # tri et yyyymm
+    # sort and yyyymm
     tt = tt.sort_values(month_col)
     if tt[month_col].dtype == "O":
         tt["_yyyymm"] = pd.to_datetime(tt[month_col]).dt.strftime("%Y%m")
     else:
         tt["_yyyymm"] = pd.to_datetime(tt[month_col]).dt.strftime("%Y%m")
 
-    # --- Côté positions: garantir yyyymm
+    # --- Positions side: ensure yyyymm
     if "yyyymm" not in df.columns:
         df["yyyymm"] = pd.to_datetime(df[tcol]).dt.strftime("%Y%m")
 
-    # --- Alignement de type pour la clé segment (int vs str)
+    # --- Align type for segment key (int vs str)
     seg_dtype = tt[seg_col_track].dtype
     try:
         df["_segkey"] = df[seg_col_pos].astype(seg_dtype)
         tt_seg = tt[seg_col_track]
     except Exception:
-        # fallback : string sur les deux si cast direct impossible
+        # fallback: string on both if direct cast is impossible
         df["_segkey"] = df[seg_col_pos].astype(str)
         tt_seg = tt[seg_col_track].astype(str)
 
-    # --- ⚠️ Jointure STRICTE (segment_id, yyyymm)
+    #  Strict join (segment_id, yyyymm)
     pos = df.merge(
         pd.DataFrame({seg_col_track: tt_seg, "_yyyymm": tt["_yyyymm"]}),
         left_on=["_segkey", "yyyymm"],
@@ -276,12 +276,12 @@ def plot_individual_track(
             "No positions found for this track/segments in astd_data after strict (segment, month) filtering."
         )
 
-    # --- Couleurs par mois (triées)
+    # --- Colors by month (sorted)
     sorted_months = sorted(pos["yyyymm"].dropna().unique().tolist())
     color_palette = px.colors.qualitative.Plotly
     month_color_map = {m: color_palette[i % len(color_palette)] for i, m in enumerate(sorted_months)}
 
-    # --- Titre auto propre si non fourni
+    # --- Auto title if not provided
     if title is None:
         flags = ", ".join(sorted([x for x in pos.get("flagname", pd.Series(dtype=str)).dropna().unique().tolist()]))
         title = f"Track {track_id} – Flag: {flags or 'n/a'}"
@@ -359,7 +359,7 @@ def plot_individual_track(
         legend=dict(orientation="h", yanchor="bottom", y=0.01, xanchor="left", x=0.01, title="Month (yyyymm)"),
     )
 
-    # --- tri manuel des traces par mois pour la légende
+    # --- sorted manually the legend traces by month
     order_index = {m: i for i, m in enumerate(sorted_months)}
     traces = list(fig.data)
     traces.sort(key=lambda tr: order_index.get(tr.name, 10**9))
