@@ -226,8 +226,8 @@ def plot_individual_track(
 
     # --- Key columns available
     seg_col_track = first_present(track_table, SEGMENT_ID_CANDS)
-    seg_col_pos   = first_present(df,          POSITION_SEGMENT_CANDS)
-    track_col     = first_present(track_table, TRACK_ID_CANDS)
+    seg_col_pos = first_present(df, POSITION_SEGMENT_CANDS)
+    track_col = first_present(track_table, TRACK_ID_CANDS)
     if seg_col_track is None or seg_col_pos is None or track_col is None:
         raise KeyError(
             "Missing expected columns: "
@@ -267,7 +267,6 @@ def plot_individual_track(
     pos = df.merge(
         pd.DataFrame({seg_col_track: tt_seg, "_yyyymm": tt["_yyyymm"]}),
         left_on=["_segkey", "yyyymm"],
-        right_on=[seg_col_track, "_yyyymm"],
         how="inner",
     ).copy()
 
@@ -289,65 +288,62 @@ def plot_individual_track(
     legend_months_added = set()
     fig = go.Figure()
 
-    MAX_GAP_HOURS_VIS = 2
     pos_sorted = pos.sort_values([seg_col_pos, tcol])
 
     for seg, g in pos_sorted.groupby(seg_col_pos):
         if g.empty:
             continue
         g = g.sort_values(tcol)
-        time_diffs = g[tcol].diff().dt.total_seconds() / 3600.0
-        gap_ilocs = np.where(time_diffs > MAX_GAP_HOURS_VIS)[0]
-        sub_groups = np.split(g, gap_ilocs)
 
-        for sub_g in sub_groups:
-            if len(sub_g) < 2:
-                continue
+        sub_g = g
 
-            current_month = sub_g["yyyymm"].iloc[0]
-            current_color = month_color_map.get(current_month, "#808080")
-            show_legend_for_this = (current_month not in legend_months_added)
-            if show_legend_for_this:
-                legend_months_added.add(current_month)
+        if len(sub_g) < 2:
+            continue
 
-            cdata, suffix, used_cols = build_hover_customdata(
-                sub_g,
-                extra_cols_priority=extra_cols_priority,
-                color_by=(color_by if color_by is not None else "yyyymm"),
-            )
+        current_month = sub_g["yyyymm"].iloc[0]
+        current_color = month_color_map.get(current_month, "#808080")
+        show_legend_for_this = (current_month not in legend_months_added)
+        if show_legend_for_this:
+            legend_months_added.add(current_month)
 
-            if show_segments:
-                fig.add_trace(go.Scattermapbox(
-                    lat=sub_g[lat],
-                    lon=sub_g[lon],
-                    mode="lines+markers",
-                    marker={"size": 4, "color": current_color},
-                    line={"color": current_color},
-                    name=current_month,
-                    legendgroup=current_month,
-                    showlegend=show_legend_for_this,
-                    text=sub_g[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
-                    customdata=cdata,
-                    hovertemplate=(
-                        "<b>Month:</b> " + current_month +
-                        "<br><b>Segment:</b> " + str(seg) +
-                        "<br><b>Date/hour:</b> %{text}"
-                        "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
-                        f"{suffix}"
-                        "<extra></extra>"
-                    ),
-                ))
-            else:
-                fig.add_trace(go.Scattermapbox(
-                    lat=sub_g[lat],
-                    lon=sub_g[lon],
-                    mode="lines",
-                    line={"width": 2, "color": current_color},
-                    name=current_month,
-                    legendgroup=current_month,
-                    showlegend=show_legend_for_this,
-                    hoverinfo="skip",
-                ))
+        cdata, suffix, used_cols = build_hover_customdata(
+            sub_g,
+            extra_cols_priority=extra_cols_priority,
+            color_by=(color_by if color_by is not None else "yyyymm"),
+        )
+
+        if show_segments:
+            fig.add_trace(go.Scattermapbox(
+                lat=sub_g[lat],
+                lon=sub_g[lon],
+                mode="lines+markers",
+                marker={"size": 4, "color": current_color},
+                line={"color": current_color},
+                name=current_month,
+                legendgroup=current_month,
+                showlegend=show_legend_for_this,
+                text=sub_g[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
+                customdata=cdata,
+                hovertemplate=(
+                    "<b>Month:</b> " + current_month +
+                    "<br><b>Segment:</b> " + str(seg) +
+                    "<br><b>Date/hour:</b> %{text}"
+                    "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
+                    f"{suffix}"
+                    "<extra></extra>"
+                ),
+            ))
+        else:
+            fig.add_trace(go.Scattermapbox(
+                lat=sub_g[lat],
+                lon=sub_g[lon],
+                mode="lines",
+                line={"width": 2, "color": current_color},
+                name=current_month,
+                legendgroup=current_month,
+                showlegend=show_legend_for_this,
+                hoverinfo="skip",
+            ))
 
     fig.update_layout(
         mapbox_style=resolve_map_style(map_style),
@@ -359,10 +355,11 @@ def plot_individual_track(
         legend=dict(orientation="h", yanchor="bottom", y=0.01, xanchor="left", x=0.01, title="Month (yyyymm)"),
     )
 
-    # --- sorted manually the legend traces by month
+
     order_index = {m: i for i, m in enumerate(sorted_months)}
     traces = list(fig.data)
     traces.sort(key=lambda tr: order_index.get(tr.name, 10**9))
     fig.data = tuple(traces)
 
     return fig
+
