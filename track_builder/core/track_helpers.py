@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from track_builder.config import _LIT_CAPS_KMH
 
 
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
@@ -54,7 +55,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
         print("Warning: No valid data remaining after cleaning")
         return df
 
-    print(f"Data sample after cleaning:")
+    print(f"Data after cleaning:")
     print(f"  Date range: {df['date_time_utc'].min()} to {df['date_time_utc'].max()}")
     print(f"  Ship types: {df['astd_cat'].unique()}")
     print(f"  Unique ships: {df['shipid'].nunique()}")
@@ -246,9 +247,9 @@ def compute_typical_speeds_by_astd_cat(
 
 # ---------------------------
 def get_all_point_to_point_speeds(
-    astd_data: pd.DataFrame, 
-    n_per_day: int = 10, 
-    clip_kmh: int = 110
+        astd_data: pd.DataFrame,
+        n_per_day: int = 10,
+        clip_kmh: int = 110
 ) -> pd.DataFrame:
     """
     Extracts all filtered point-to-point speeds and their categories
@@ -295,34 +296,34 @@ def get_all_point_to_point_speeds(
     for (sid, d), grp in iterable:
         if len(grp) < 2:
             continue
-        
+
         # Use the existing helper to get speeds for this group
-        v = _compute_speed_kmh_between_rows(grp) 
-        
+        v = _compute_speed_kmh_between_rows(grp)
+
         if v.empty:
             continue
-        
+
         # Clean inf/-inf (from 0-sec gaps) and NaNs
         v = v.replace([np.inf, -np.inf], np.nan).dropna()
-        
+
         # Filter speeds: > 0 (stopped) and < absurd limit
         # (Using > 0 as per compute_typical_speeds_q90)
         v = v[(v > 0) & (v <= clip_kmh)]
-        
+
         if v.empty:
             continue
-        
+
         # Sample to keep the dataset manageable
-        if len(v) > n_per_day: 
+        if len(v) > n_per_day:
             v = v.sample(n_per_day, random_state=42)
-        
+
         rows.append(pd.DataFrame({'shipid': sid, 'speed_kmh': v.values}))
 
     if not rows:
         return pd.DataFrame(columns=['astd_cat', 'speed_kmh'])
 
     speeds_df = pd.concat(rows, ignore_index=True)
-    
+
     # Get the category for each shipid
     # (Using the first-seen category for each ship)
     ship_cat_map = work.drop_duplicates('shipid', keep='first').set_index('shipid')['astd_cat']
@@ -348,24 +349,7 @@ def calculate_improved_match_score(candidates: pd.DataFrame, ship_type: str, cur
     - np.ndarray: Array of match scores (0-1+ scale, lower is better)
     """
     # Expected typical speeds for ship types (km/h) - more conservative
-    typical_speeds = {
-        'unknown': 12,
-        'fishing vessels': 8,
-        'passenger ships': 25,
-        'oil product tankers': 15,
-        'other activities': 12,
-        'general cargo ships': 15,
-        'ro-ro cargo ships': 20,
-        'cruise ships': 25,
-        'refrigerated cargo ships': 15,
-        'chemical tankers': 15,
-        'bulk carriers': 12,
-        'other service offshore vessels': 10,
-        'offshore supply ships': 8,
-        'crude oil tankers': 14,
-        'container ships': 22,
-        'gas tankers': 16,
-    }
+    typical_speeds = _LIT_CAPS_KMH
 
     typical_speed = typical_speeds.get(ship_type, 15)
 
@@ -380,52 +364,15 @@ def calculate_improved_match_score(candidates: pd.DataFrame, ship_type: str, cur
     # Month continuity score (heavily favor consecutive months)
     month_score = candidates['month_gap'].apply(lambda x: 0.0 if x == 1 else 0.5 if x == 2 else 1.0)
 
-    # Position continuity - check if the route makes geographical sense
-    # (This could be enhanced with actual shipping route data)
-    position_score = calculate_position_continuity_score(candidates, current_segment)
-
     # Weighted combination - prioritize continuity and realistic movement
     total_score = (
             0.3 * distance_score +  # Distance traveled
             0.2 * speed_score +  # Speed reasonableness
             0.2 * time_score +  # Time gap
-            0.2 * month_score +  # Month continuity
-            0.1 * position_score  # Position logic
+            0.3 * month_score  # Month continuity
     )
 
     return total_score
-
-
-def calculate_position_continuity_score(candidates: pd.DataFrame, current_segment: pd.Series) -> np.ndarray:
-    """
-    Calculate a score based on position continuity and geographical logic.
-
-    Simple heuristic to penalize extreme coordinate jumps that might indicate
-    unrealistic ship movements.
-
-    Parameters:
-    - candidates (pd.DataFrame): Candidates with start positions
-    - current_segment (pd.Series): Current segment with end position
-
-    Returns:
-    - np.ndarray: Array of position scores (0-1 scale, lower is better)
-    """
-    # Simple heuristic: penalize extreme direction changes
-    current_lat = current_segment['end_lat']
-    current_lon = current_segment['end_lon']
-
-    scores = []
-    for _, candidate in candidates.iterrows():
-        # Calculate bearing change (simplified)
-        lat_change = candidate['start_lat'] - current_lat
-        lon_change = candidate['start_lon'] - current_lon
-
-        # Penalize extreme coordinate jumps
-        coord_jump = abs(lat_change) + abs(lon_change)
-        score = min(coord_jump / 10.0, 1.0)  # Normalize by 10 degrees
-        scores.append(score)
-
-    return np.array(scores)
 
 
 def _norm_str(x):
@@ -436,12 +383,13 @@ def _norm_str(x):
         return None
     return s.lower()
 
+
 def filter_attr_consistency_tolerant(
-    cand_df,
-    cur_row,
-    *,
-    attrs=("flagname","iceclass","astd_cat","sizegroup_gt"),
-    log=None
+        cand_df,
+        cur_row,
+        *,
+        attrs=("flagname", "iceclass", "astd_cat", "sizegroup_gt"),
+        log=None
 ):
     """
     Tolerant of missing fields:
