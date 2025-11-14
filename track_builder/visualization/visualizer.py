@@ -216,158 +216,150 @@ def plot_individual_track(
         map_style: str = "open-street-map",
         height: int = 700,
         title=None,
+        extra_cols_priority=None,
+        color_by=None,
 ) -> go.Figure:
-    """
-    Detailed view of a single track, compatible with the table produced by main.build_track_table().
-    (docstring inchangé)
-    """
-
-    # Geo + time columns (reuse standardization from Part 1; no I/O re-validations here)
+    # Visualize a single track with positions from astd_data.
     cols = resolve_geo_time_cols(astd_data)
-    df = cols["_df"]
+    df = cols["_df"].copy()
     lat, lon, tcol = cols["lat"], cols["lon"], cols["time"]
 
-    # Separate resolution of 'segment' columns for each DataFrame
-    seg_col_track = first_present(track_table, SEGMENT_ID_CANDS)  # e.g. 'segment_id' from track_table
-    seg_col_pos = first_present(df, POSITION_SEGMENT_CANDS)  # e.g. 'shipid' from astd_data
-    track_col = first_present(track_table, TRACK_ID_CANDS)  # e.g. 'track_id' from track_table
-
+    # --- Key columns available
+    seg_col_track = first_present(track_table, SEGMENT_ID_CANDS)
+    seg_col_pos = first_present(df, POSITION_SEGMENT_CANDS)
+    track_col = first_present(track_table, TRACK_ID_CANDS)
     if seg_col_track is None or seg_col_pos is None or track_col is None:
         raise KeyError(
             "Missing expected columns: "
-            f"track_table[{SEGMENT_ID_CANDS + TRACK_ID_CANDS}] et "
+            f"track_table[{SEGMENT_ID_CANDS + TRACK_ID_CANDS}] and "
             f"astd_data[{POSITION_SEGMENT_CANDS}]."
         )
 
-    # Filter track_table for the given track_id
+    # --- Sub-table of the track and normalization of the month -> yyyymm
     tt = track_table[track_table[track_col] == track_id].copy()
-    month_col = first_present(track_table, MONTH_CANDS)
-    if month_col:
-        tt = tt.sort_values(month_col)
-
     if tt.empty:
         raise ValueError(f"Track '{track_id}' not found in track_table.")
+    month_col = first_present(tt, MONTH_CANDS)
+    if month_col is None:
+        raise KeyError(f"track_table must have a month column in {MONTH_CANDS}.")
+    # sort and yyyymm
+    tt = tt.sort_values(month_col)
+    if tt[month_col].dtype == "O":
+        tt["_yyyymm"] = pd.to_datetime(tt[month_col]).dt.strftime("%Y%m")
+    else:
+        tt["_yyyymm"] = pd.to_datetime(tt[month_col]).dt.strftime("%Y%m")
 
-    # List of segments from track_table (e.g., values from 'segment_id')
-    segment_ids = set(tt[seg_col_track].dropna().unique().tolist())
+    # --- Positions side: ensure yyyymm
+    if "yyyymm" not in df.columns:
+        df["yyyymm"] = pd.to_datetime(df[tcol]).dt.strftime("%Y%m")
 
-    # Filter positions with the equivalent column from positions (e.g., 'shipid')
-    pos = df[df[seg_col_pos].isin(segment_ids)].copy()
+    # --- Align type for segment key (int vs str)
+    seg_dtype = tt[seg_col_track].dtype
+    try:
+        df["_segkey"] = df[seg_col_pos].astype(seg_dtype)
+        tt_seg = tt[seg_col_track]
+    except Exception:
+        # fallback: string on both if direct cast is impossible
+        df["_segkey"] = df[seg_col_pos].astype(str)
+        tt_seg = tt[seg_col_track].astype(str)
+
+    #  Strict join (segment_id, yyyymm)
+    pos = df.merge(
+        pd.DataFrame({seg_col_track: tt_seg, "_yyyymm": tt["_yyyymm"]}),
+        left_on=["_segkey", "yyyymm"],
+        how="inner",
+    ).copy()
+
     if pos.empty:
         raise ValueError(
-            "No positions found for this track/segments in astd_data. "
-            f"Compared via astd_data['{seg_col_pos}'] ∈ track_table['{seg_col_track}']."
+            "No positions found for this track/segments in astd_data after strict (segment, month) filtering."
         )
 
-    
-    
-    # Create 'yyyymm' column for color mapping
-    pos['yyyymm'] = pos[tcol].dt.strftime('%Y%m')
+    # --- Colors by month (sorted)
+    sorted_months = sorted(pos["yyyymm"].dropna().unique().tolist())
+    color_palette = px.colors.qualitative.Plotly
+    month_color_map = {m: color_palette[i % len(color_palette)] for i, m in enumerate(sorted_months)}
 
-    # Create the color map
-    unique_months = sorted(pos['yyyymm'].unique())
-    # Use a standard Plotly qualitative color palette
-    color_palette = px.colors.qualitative.Plotly 
-    month_color_map = {}
-    for i, month in enumerate(unique_months):
-        # Cycle through the palette if there are more months than colors
-        month_color_map[month] = color_palette[i % len(color_palette)]
-    
-    # Set to track which months have been added to the legend
+    # --- Auto title if not provided
+    if title is None:
+        flags = ", ".join(sorted([x for x in pos.get("flagname", pd.Series(dtype=str)).dropna().unique().tolist()]))
+        title = f"Track {track_id} – Flag: {flags or 'n/a'}"
+
     legend_months_added = set()
-
-    # Plotly figure
     fig = go.Figure()
 
-    # Define a visual gap threshold (in hours)
-    MAX_GAP_HOURS_VIS = 24.0  # You can adjust this threshold
+    pos_sorted = pos.sort_values([seg_col_pos, tcol])
 
-    # Sort positions by segment, then time, to prepare for gap detection
-    pos_sorted = pos.sort_values([seg_col_pos, tcol]) # pos now has 'yyyymm'
-
-    # Loop over each segment, find gaps, and plot sub-segments
     for seg, g in pos_sorted.groupby(seg_col_pos):
-        
         if g.empty:
             continue
-
-        # Calculate time gaps *within* this segment
         g = g.sort_values(tcol)
-        time_diffs = g[tcol].diff().dt.total_seconds() / 3600.0
 
-        # Find the .iloc locations (integer positions) where gaps occur
-        gap_ilocs = np.where(time_diffs > MAX_GAP_HOURS_VIS)[0]
+        sub_g = g
 
-        # Split the dataframe 'g' into sub-groups at these locations
-        sub_groups = np.split(g, gap_ilocs)
+        if len(sub_g) < 2:
+            continue
 
-        # Loop over the sub-groups and plot them individually
-        for i, sub_g in enumerate(sub_groups):
-            
-            # Don't plot empty or single-point dataframes
-            if len(sub_g) < 2: 
-                continue
-                
-            # Get color and legend info for this sub-segment
-            # Use the month of the first point in the sub-segment
-            current_month = sub_g['yyyymm'].iloc[0]
-            current_color = month_color_map.get(current_month, "#808080") # Default to gray
-            
-            # Check if this month is already in the legend
-            show_legend_for_this = (current_month not in legend_months_added)
-            if show_legend_for_this:
-                legend_months_added.add(current_month)
+        current_month = sub_g["yyyymm"].iloc[0]
+        current_color = month_color_map.get(current_month, "#808080")
+        show_legend_for_this = (current_month not in legend_months_added)
+        if show_legend_for_this:
+            legend_months_added.add(current_month)
 
-            # Apply original plotting logic based on 'show_segments'
-            if show_segments:
-                fig.add_trace(go.Scattermapbox(
-                    lat=sub_g[lat],
-                    lon=sub_g[lon],
-                    mode="lines+markers",
-                   
-                    marker={"size": 4, "color": current_color},
-                    line={"color": current_color},
-                    # Legend by month
-                    name=current_month,
-                    legendgroup=current_month, # Group traces by month
-                    showlegend=show_legend_for_this, 
-                    text=sub_g[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
-                    hovertemplate=(
-                            # Add month to hover
-                            "<b>Month:</b> " + current_month +
-                            "<br><b>Segment:</b> " + str(seg) +
-                            "<br><b>Date/hour:</b> %{text}"
-                            "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
-                            "<extra></extra>"
-                    ),
-                ))
-            else:
-                # One polyline for the entire track (but broken by gaps)
-                fig.add_trace(go.Scattermapbox(
-                    lat=sub_g[lat],
-                    lon=sub_g[lon],
-                    mode="lines",
-                    #Apply color
-                    line={"width": 2, "color": current_color},
-                    # Legend by month
-                    name=current_month,
-                    legendgroup=current_month,
-                    showlegend=show_legend_for_this,
-                    hoverinfo="skip",
-                ))
+        cdata, suffix, used_cols = build_hover_customdata(
+            sub_g,
+            extra_cols_priority=extra_cols_priority,
+            color_by=(color_by if color_by is not None else "yyyymm"),
+        )
 
-    # Layout / centering
+        if show_segments:
+            fig.add_trace(go.Scattermapbox(
+                lat=sub_g[lat],
+                lon=sub_g[lon],
+                mode="lines+markers",
+                marker={"size": 4, "color": current_color},
+                line={"color": current_color},
+                name=current_month,
+                legendgroup=current_month,
+                showlegend=show_legend_for_this,
+                text=sub_g[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
+                customdata=cdata,
+                hovertemplate=(
+                    "<b>Month:</b> " + current_month +
+                    "<br><b>Segment:</b> " + str(seg) +
+                    "<br><b>Date/hour:</b> %{text}"
+                    "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
+                    f"{suffix}"
+                    "<extra></extra>"
+                ),
+            ))
+        else:
+            fig.add_trace(go.Scattermapbox(
+                lat=sub_g[lat],
+                lon=sub_g[lon],
+                mode="lines",
+                line={"width": 2, "color": current_color},
+                name=current_month,
+                legendgroup=current_month,
+                showlegend=show_legend_for_this,
+                hoverinfo="skip",
+            ))
+
     fig.update_layout(
         mapbox_style=resolve_map_style(map_style),
         mapbox_zoom=3,
-        mapbox_center={
-            "lat": float(pos[lat].median()),
-            "lon": float(pos[lon].median()),
-        },
+        mapbox_center={"lat": float(pos[lat].median()), "lon": float(pos[lon].median())},
         height=height,
-        title=title or f"Track {track_id} – detailed view",
+        title=title,
         margin=dict(l=0, r=0, t=60, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=0.01, xanchor="left", x=0.01),
+        legend=dict(orientation="h", yanchor="bottom", y=0.01, xanchor="left", x=0.01, title="Month (yyyymm)"),
     )
 
+
+    order_index = {m: i for i, m in enumerate(sorted_months)}
+    traces = list(fig.data)
+    traces.sort(key=lambda tr: order_index.get(tr.name, 10**9))
+    fig.data = tuple(traces)
+
     return fig
+

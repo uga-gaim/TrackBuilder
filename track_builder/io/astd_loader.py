@@ -27,6 +27,7 @@ def load_astd_data(
         file_paths: Union[Pathish, Iterable[Pathish], None],
         pattern: Optional[str] = None,
         usecols: Optional[Union[str, List[str]]] = None,
+        remove_nan_rows: Optional[Union[str, List[str]]] = None,
         sampling: Optional[Union[float, Sequence[int]]] = None,
         infer_datetime_cols: bool = True,
         standardize_cols: bool = True,
@@ -49,6 +50,7 @@ def load_astd_data(
         read_csv_kwargs.setdefault('dtype', ASTD_DTYPE_MAP)
     elif usecols is not None:
         read_csv_kwargs.setdefault('usecols', usecols)
+
 
     read_csv_kwargs.setdefault('low_memory', False)
     rs = read_csv_kwargs.pop("random_state", None)
@@ -84,6 +86,17 @@ def load_astd_data(
         frames.append(df)
 
     out = pd.concat(frames, ignore_index=True)
+
+    if remove_nan_rows in ("default", "essential"):
+        out = out.dropna(subset=ASTD_USEFUL_COLS)
+    elif remove_nan_rows is not None:
+        if isinstance(remove_nan_rows, str):
+            remove_nan_rows = [remove_nan_rows]
+        out = out.dropna(subset=remove_nan_rows)
+
+    
+    out = out.reset_index(drop=True)
+
 
     
     if quality_threshold_minutes and quality_threshold_minutes > 0:
