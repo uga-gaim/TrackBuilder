@@ -267,6 +267,7 @@ def plot_individual_track(
     pos = df.merge(
         pd.DataFrame({seg_col_track: tt_seg, "_yyyymm": tt["_yyyymm"]}),
         left_on=["_segkey", "yyyymm"],
+        right_on=[seg_col_track, "_yyyymm"],
         how="inner",
     ).copy()
 
