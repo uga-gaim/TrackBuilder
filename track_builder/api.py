@@ -23,6 +23,7 @@ from track_builder.io.astd_loader import (
     load_astd_data,
     load_astd_monthly,
     load_positions_for_track,
+    build_light_multi_track_positions
 )
 
 from track_builder.visualization.visualizer import (
@@ -44,6 +45,7 @@ __all__ = [
     "load_astd_data",
     "load_astd_monthly",
     "load_positions_for_track",
+    "build_light_multi_track_positions",
     "plot_ship_tracks",
     "plot_individual_track",
     "export_figure",
