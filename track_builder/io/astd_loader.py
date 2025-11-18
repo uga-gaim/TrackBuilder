@@ -140,3 +140,130 @@ def load_astd_monthly(
         return pd.DataFrame()  # Return empty dataFrame
 
     return load_astd_data(selected_files, progress=progress, **kwargs)
+
+
+
+
+
+def load_positions_for_track(
+        track_id: Optional[Union[str, int]],
+        track_table: pd.DataFrame,
+        *,
+        base_path: Optional[Pathish] = None,
+        progress: bool = True,
+        chunksize: int = 50_000,
+) -> pd.DataFrame:
+    """
+    Charge uniquement les positions ASTD nécessaires pour un track donné.
+
+    Étapes :
+      1) Récupérer, dans track_table, les (month, segment_id) pour ce track_id.
+      2) Trouver les fichiers ASTD correspondants sur disque (année/mois) via
+         iter_files + matches_year_month.
+      3) Lire ces fichiers en chunks avec pandas.read_csv(..., chunksize=...),
+         standardiser, parser les dates, et ne garder que les lignes dont shipid
+         appartient aux segment_id du track.
+      4) Concaténer tous les morceaux en un seul DataFrame.
+    """
+    if track_id is None:
+        raise ValueError("track_id must not be None.")
+
+    # --- Vérifications de base
+    if "track_id" not in track_table.columns:
+        raise KeyError("track_table must contain a 'track_id' column.")
+    if "month" not in track_table.columns:
+        raise KeyError("track_table must contain a 'month' column (e.g. '2019-07').")
+
+    seg_col = "segment_id" if "segment_id" in track_table.columns else None
+    if seg_col is None:
+        raise KeyError("track_table must contain a 'segment_id' column.")
+
+    # --- Sous-table pour ce track
+    tt = track_table[track_table["track_id"].astype(str) == str(track_id)].copy()
+    if tt.empty:
+        raise ValueError(f"Track '{track_id}' not found in track_table.")
+
+    # --- Segment IDs de ce track
+    seg_ids = tt[seg_col].dropna().unique().tolist()
+    if not seg_ids:
+        return pd.DataFrame()
+
+    seg_ids_str = {str(s) for s in seg_ids}
+
+    # --- Extraire (année, mois) à partir de 'month'
+    months_series = pd.to_datetime(tt["month"], errors="coerce").dropna()
+    if months_series.empty:
+        return pd.DataFrame()
+
+    months_by_year: dict[int, set[int]] = {}
+    for dt64 in months_series.unique():
+        ts = pd.Timestamp(dt64)
+        months_by_year.setdefault(ts.year, set()).add(ts.month)
+
+    if not months_by_year:
+        return pd.DataFrame()
+
+    # --- Trouver les fichiers ASTD correspondants
+    root = Path(base_path).resolve() if base_path is not None else DEFAULT_DATA_PATH
+    all_files = iter_files(root, pattern=None)
+
+    selected_files = []
+    for p in all_files:
+        fname = p.name
+        for year, months in months_by_year.items():
+            if matches_year_month(fname, year, months):
+                selected_files.append(p)
+                break
+
+    selected_files = sorted({p.resolve() for p in selected_files})
+    if not selected_files:
+        return pd.DataFrame()
+
+    # --- Lecture filtrée en chunks (sans read_csv_auto)
+    frames: list[pd.DataFrame] = []
+
+    iterator = selected_files
+    if progress and HAS_TQDM:
+        from tqdm.auto import tqdm
+        iterator = tqdm(iterator, total=len(selected_files),
+                        desc=f"Loading positions for track {track_id}")
+
+    for path in iterator:
+        # On force sep=';' car c'est le cas typique pour ASTD.
+        reader = pd.read_csv(
+            path,
+            sep=";",
+            usecols=ASTD_USEFUL_COLS,
+            dtype=ASTD_DTYPE_MAP,
+            low_memory=False,
+            chunksize=chunksize,
+        )
+
+        # reader est un TextFileReader → itérable de chunks
+        for chunk in reader:
+            if chunk is None or chunk.empty:
+                continue
+
+            # Standardisation + dates (comme dans load_astd_data)
+            chunk = standardize_columns(chunk)
+            chunk = parse_dates(chunk)
+
+            if "shipid" not in chunk.columns:
+                continue
+
+            # Filtrer uniquement les segments de ce track
+            mask = chunk["shipid"].astype(str).isin(seg_ids_str)
+            sub = chunk.loc[mask]
+            if not sub.empty:
+                frames.append(sub)
+
+    if not frames:
+        return pd.DataFrame()
+
+    out = pd.concat(frames, ignore_index=True)
+
+    # Tri temporel pratique pour la visualisation
+    if "date_time_utc" in out.columns:
+        out = out.sort_values("date_time_utc").reset_index(drop=True)
+
+    return out
