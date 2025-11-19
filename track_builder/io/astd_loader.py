@@ -219,7 +219,6 @@ def load_positions_for_track(
     if not selected_files:
         return pd.DataFrame()
 
-    # --- Lecture filtrée en chunks (sans read_csv_auto)
     frames: list[pd.DataFrame] = []
 
     iterator = selected_files
