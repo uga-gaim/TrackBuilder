@@ -146,7 +146,7 @@ def load_astd_monthly(
 
 
 
-def load_positions_for_track(
+def load_track_data(
         track_id: Optional[Union[str, int]],
         track_table: pd.DataFrame,
         *,
@@ -267,7 +267,7 @@ def load_positions_for_track(
     return out
 
 
-def build_light_multi_track_positions(
+def build_light_multi_track_data(
         track_table: pd.DataFrame,
         track_sampling: Union[int, Sequence[int]],
         *,
@@ -387,13 +387,8 @@ def build_light_multi_track_positions(
     for tid in selected_ids:
         if df_pos is None:
             # --- Mode reading from disk ---
-            df_t = load_positions_for_track(
-                track_id=tid,
-                track_table=track_table,
-                base_path=base_path,
-                progress=progress,
-                chunksize=chunksize,
-            )
+            df_t = load_track_data(track_id=tid, track_table=track_table, base_path=base_path, progress=progress,
+                                   chunksize=chunksize)
         else:
             # --- Mode filtering in already loaded positions_df ---
             tt_tid = track_table[track_table["track_id"] == tid][["month", "segment_id"]].copy()
