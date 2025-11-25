@@ -62,6 +62,124 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def remove_unrealistic_points(
+    astd_data: pd.DataFrame,
+    speed_margin: float = 1.5,
+) -> pd.DataFrame:
+    """
+    Remove unrealistic AIS points by checking whether consecutive position fixes are physically reachable
+    given ship-category typical speeds and literature caps.
+    This function performs a vectorized cleanup of an input AIS-like DataFrame by:
+    - ensuring date_time_utc is a timezone-aware datetime and sorting by shipid and time;
+    - deriving a per-row speed limit (km/h) from category typical speeds multiplied by speed_margin,
+        capped by literature maxima (or defaulting to 80 km/h when unknown);
+    - computing forward neighbor distances (Haversine, km) and elapsed time (hours) per ship;
+    - marking a forward link valid if the observed distance <= speed_limit * elapsed_time;
+    - propagating that validity backward to the previous point on the same ship;
+    - keeping only points that participate in at least one valid forward or backward link;
+    - returning a cleaned copy with temporary columns removed.
+    Args:
+            astd_data (pandas.DataFrame): Input table of AIS/spatial points. Required columns:
+                    - 'shipid' (identifier grouping successive observations by vessel)
+                    - 'date_time_utc' (datetime-like, will be coerced to timezone-aware if needed)
+                    - 'latitude', 'longitude' (decimal degrees)
+                    - 'astd_cat' (category used to look up typical speeds)
+            speed_margin (float, optional): Multiplicative margin applied to the typical speed
+                    (typical_speed_kmh * speed_margin) to produce the working speed limit.
+                    Defaults to 1.5.
+    Returns:
+            pandas.DataFrame: A filtered copy of the input containing only points that belong to
+            at least one physically plausible movement link (forward or backward). Temporary
+            helper columns are removed.
+    Notes:
+            - Units: distances are computed in kilometers, speeds in km/h, elapsed times in hours.
+            - The function relies on external helpers/values:
+                    - compute_typical_speeds_by_astd_cat(df) -> DataFrame with columns ['astd_cat', 'typical_speed_kmh']
+                    - _LIT_CAPS_KMH: mapping of normalized category -> literature speed cap (km/h)
+                    - haversine_km(lat1, lon1, lat2, lon2) -> distance in km
+            - If typical speed and literature cap are both missing for a category, a default cap of 80 km/h is used.
+            - Points with zero elapsed time between identical timestamps are treated as invalid if a non-zero distance is observed.
+            - The function prints progress/summary messages and returns an empty or original-like DataFrame
+                when input is None or empty.
+    Raises:
+            KeyError/TypeError: May be raised if required columns are missing or have incompatible types.
+    astd_data: pd.DataFrame,
+    """
+    if astd_data is None or len(astd_data) == 0:
+        return astd_data
+
+    df = astd_data.copy()
+    
+    if not pd.api.types.is_datetime64_any_dtype(df['date_time_utc']):
+        df['date_time_utc'] = pd.to_datetime(df['date_time_utc'], utc=True)
+        
+    df = df.sort_values(['shipid', 'date_time_utc'])
+
+    # define the limit speed
+    print("computing typical speeds...")
+    typ = compute_typical_speeds_by_astd_cat(df)
+    
+    # Mapping typical speeds
+    df['temp_cat'] = df['astd_cat'].astype(str).str.lower().str.strip()
+    typ['astd_cat_norm'] = typ['astd_cat'].astype(str).str.lower().str.strip()
+    typical_lookup = dict(zip(typ['astd_cat_norm'], typ['typical_speed_kmh']))
+    
+    typical_val = df['temp_cat'].map(typical_lookup)
+    lit_cap_val = df['temp_cat'].map(_LIT_CAPS_KMH)
+    
+    # Default to 80 km/h if unknown
+    limit_series = typical_val * speed_margin
+    limit_series = np.where(
+        typical_val.notna() & lit_cap_val.notna(),
+        np.minimum(limit_series, lit_cap_val),
+        np.where(lit_cap_val.notna(), lit_cap_val, 80.0)
+    )
+    df['speed_limit'] = limit_series
+
+    # compute neighbors
+    
+    g = df.groupby('shipid')
+    next_lat = g['latitude'].shift(-1)
+    next_lon = g['longitude'].shift(-1)
+    next_time = g['date_time_utc'].shift(-1)
+    
+    # Real distance (Haversine)
+    dist_fwd = haversine_km(df['latitude'], df['longitude'], next_lat, next_lon)
+    
+    # Elapsed time (in hours)
+    time_fwd_h = (next_time - df['date_time_utc']).dt.total_seconds() / 3600.0
+    
+   
+    # What distance could this ship physically have covered during this time?
+    # Ex: if Limit=30km/h and Time=2h -> Max=60km. If Time=0h -> Max=0km.
+    max_possible_dist = df['speed_limit'] * time_fwd_h
+    
+    # Validation: Did the ship travel less than its theoretical maximum?
+    # Note: If time_fwd_h = 0 and dist > 0 (instant teleportation), this returns False. Correct.
+    valid_fwd = (dist_fwd <= max_possible_dist)
+    valid_fwd = valid_fwd.fillna(False)
+
+
+    # Same logic: if the link (i -> i+1) is valid, then the link (i+1 -> i) is also valid.
+    # We use vectorized shift(1) and check that we remain on the same ship
+    is_same_ship_prev = (df['shipid'] == df['shipid'].shift(1))
+    valid_bwd = valid_fwd.shift(1).fillna(False) & is_same_ship_prev
+
+    
+    # A point is kept if it has at least one logical link (before or after)
+    mask_keep = valid_fwd | valid_bwd
+
+    cleaned = df[mask_keep].copy()
+    
+    # Final cleaning
+    cols_to_drop = ['speed_limit', 'temp_cat']
+    cleaned = cleaned.drop(columns=[c for c in cols_to_drop if c in cleaned.columns])
+    
+    n_dropped = len(df) - len(cleaned)
+    if n_dropped > 0:
+        print(f"Cleaning completed: {n_dropped} 'ghost' or aberrant points removed.")
+
+    return cleaned
 
 def create_ship_signature(ship_row: pd.Series) -> str:
     """

@@ -6,6 +6,8 @@ from typing import Iterable, Optional, Union, List, Any, Sequence
 import pandas as pd
 import numpy as np
 
+from track_builder.core.track_helpers import remove_unrealistic_points
+
 from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP
 # Internal helper imports
 from track_builder.core.io_helpers import (
@@ -153,6 +155,7 @@ def load_track_data(
         base_path: Optional[Pathish] = None,
         progress: bool = True,
         chunksize: int = 50_000,
+        use_preprocessing: bool = True,
 ) -> pd.DataFrame:
     """
     Load only the ASTD positions needed for a given track.
@@ -259,6 +262,9 @@ def load_track_data(
         return pd.DataFrame()
 
     out = pd.concat(frames, ignore_index=True)
+
+    if use_preprocessing:
+        out = remove_unrealistic_points(out)
 
     # Temporal sorting useful for visualization
     if "date_time_utc" in out.columns:
