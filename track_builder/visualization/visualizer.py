@@ -103,12 +103,24 @@ def plot_ship_tracks(
             if color_map and use_color in grp.columns:
                 cat_val = str(color_spec["series"].loc[grp.index].iloc[0])
                 line_kwargs = {"line": {"color": color_map.get(cat_val, "#444")}}
+            
+            cdata, suffix, _ = build_hover_customdata(grp, extra_cols_priority, color_by=color_by)
+            
             fig.add_trace(go.Scattermapbox(
                 lat=grp[lat],
                 lon=grp[lon],
                 mode="lines",
                 name=f"Track {track_id}",
-                hoverinfo="skip",
+                
+                text=grp[tcol].dt.strftime("%Y-%m-%d %H:%M:%S"),
+                customdata=cdata,
+                hovertemplate=(
+                    f"<b>Track ID:</b> {track_id}" 
+                    "<br><b>Date/Hour:</b> %{text}"
+                    "<br>Lat: %{lat:.4f}  Lon: %{lon:.4f}"
+                    f"{suffix}"
+                    "<extra></extra>"
+                ),
                 **line_kwargs
             ))
 
