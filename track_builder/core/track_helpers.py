@@ -64,7 +64,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 
 def remove_unrealistic_points(
     astd_data: pd.DataFrame,
-    multiplier: float = 1.5,
+    multiplier: float = 3.0,
 ) -> pd.DataFrame:
     """
     Remove unrealistic AIS points by checking whether consecutive position fixes are physically reachable
