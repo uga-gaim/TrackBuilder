@@ -64,7 +64,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 
 def remove_unrealistic_points(
     astd_data: pd.DataFrame,
-    speed_margin: float = 1.5,
+    multiplier: float = 1.5,
 ) -> pd.DataFrame:
     """
     Remove unrealistic AIS points by checking whether consecutive position fixes are physically reachable
@@ -128,7 +128,7 @@ def remove_unrealistic_points(
     lit_cap_val = df['temp_cat'].map(_LIT_CAPS_KMH)
     
     # Default to 80 km/h if unknown
-    limit_series = typical_val * speed_margin
+    limit_series = typical_val * multiplier
     limit_series = np.where(
         typical_val.notna() & lit_cap_val.notna(),
         np.minimum(limit_series, lit_cap_val),
