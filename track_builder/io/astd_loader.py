@@ -145,11 +145,8 @@ def load_astd_monthly(
     return load_astd_data(selected_files, progress=progress, **kwargs)
 
 
-
-
-
 def load_track_data(
-        track_id: Optional[Union[str, int]],
+        track_ids: Union[Union[str, int], Sequence[Union[str, int]]],
         track_table: pd.DataFrame,
         *,
         base_path: Optional[Pathish] = None,
@@ -158,69 +155,85 @@ def load_track_data(
         use_preprocessing: bool = True,
 ) -> pd.DataFrame:
     """
-    Load only the ASTD positions needed for a given track.
+    Load ASTD positions for one or MULTIPLE tracks simultaneously (Batch I/O).
 
-    Steps:
-      1) Retrieve from track_table the (month, segment_id) entries for this track_id.
-      2) Find the corresponding ASTD files on disk (year/month) using
-         iter_files + matches_year_month.
-      3) Read these files in chunks with pandas.read_csv(..., chunksize=...),
-         standardize columns, parse dates, and keep only rows whose shipid
-         belongs to the track's segment_id values.
-      4) Concatenate all chunks into a single DataFrame.
+    Optimization:
+      Instead of opening the same monthly CSV files multiple times (once per track),
+      this function identifies all files needed for the batch of tracks, reads them once,
+      and extracts all relevant segments in a single pass.
+
+    Args:
+        track_ids: A single ID or a list of IDs to load.
+        track_table: The table mapping tracks to segments and months.
+        base_path: Path to raw CSVs.
+        progress: Show tqdm progress bar.
+        chunksize: Pandas read_csv chunksize.
+        use_preprocessing: Apply cleaning/filtering steps.
+
+    Returns:
+        DataFrame with positions and an added 'track_id' column.
     """
-    if track_id is None:
-        raise ValueError("track_id must not be None.")
+
+    if isinstance(track_ids, (str, int, np.integer)):
+        track_ids = [track_ids]
+
+    track_ids = list(track_ids)
+    if not track_ids:
+        return pd.DataFrame()
 
     if "track_id" not in track_table.columns:
         raise KeyError("track_table must contain a 'track_id' column.")
     if "month" not in track_table.columns:
         raise KeyError("track_table must contain a 'month' column (e.g. '2019-07').")
 
-    seg_col = "segment_id" if "segment_id" in track_table.columns else None
-    if seg_col is None:
-        raise KeyError("track_table must contain a 'segment_id' column.")
+    seg_col = "segment_id" if "segment_id" in track_table.columns else "shipid"
+    if seg_col not in track_table.columns:
+        raise KeyError("track_table must contain a 'segment_id' or 'shipid' column.")
 
-    # subset for this track_id
-    tt = track_table[track_table["track_id"].astype(str) == str(track_id)].copy()
-    if tt.empty:
-        raise ValueError(f"Track '{track_id}' not found in track_table.")
 
-    # Segment IDs for this track
-    seg_ids = tt[seg_col].dropna().unique().tolist()
-    if not seg_ids:
+    requested_ids_str = set(str(x) for x in track_ids)
+    tt_subset = track_table[track_table["track_id"].astype(str).isin(requested_ids_str)].copy()
+
+    if tt_subset.empty:
+        print(f"Warning: None of the requested track_ids found in track_table.")
         return pd.DataFrame()
 
-    seg_ids_str = {str(s) for s in seg_ids}
 
-    # month to load
-    months_series = pd.to_datetime(tt["month"], errors="coerce").dropna()
-    if months_series.empty:
+    tt_subset["month_dt"] = pd.to_datetime(tt_subset["month"], errors="coerce")
+
+
+    valid_combinations = set()
+    needed_months_by_year: dict[int, set[int]] = {}
+
+    for _, row in tt_subset.iterrows():
+        ts = row["month_dt"]
+        if pd.isna(ts):
+            continue
+        sid = str(row[seg_col])
+        valid_combinations.add((ts.year, ts.month, sid))
+        needed_months_by_year.setdefault(ts.year, set()).add(ts.month)
+
+    if not needed_months_by_year:
         return pd.DataFrame()
 
-    months_by_year: dict[int, set[int]] = {}
-    for dt64 in months_series.unique():
-        ts = pd.Timestamp(dt64)
-        months_by_year.setdefault(ts.year, set()).add(ts.month)
 
-    if not months_by_year:
-        return pd.DataFrame()
-
-    # find relevant files
     root = Path(base_path).resolve() if base_path is not None else DEFAULT_DATA_PATH
     all_files = iter_files(root, pattern=None)
 
     selected_files = []
     for p in all_files:
         fname = p.name
-        for year, months in months_by_year.items():
+
+        for year, months in needed_months_by_year.items():
             if matches_year_month(fname, year, months):
                 selected_files.append(p)
                 break
 
     selected_files = sorted({p.resolve() for p in selected_files})
+
     if not selected_files:
         return pd.DataFrame()
+
 
     frames: list[pd.DataFrame] = []
 
@@ -228,55 +241,84 @@ def load_track_data(
     if progress and HAS_TQDM:
         from tqdm.auto import tqdm
         iterator = tqdm(iterator, total=len(selected_files),
-                        desc=f"Loading positions for track {track_id}")
+                        desc=f"Batch loading {len(track_ids)} tracks")
+
+    # Optimization: Pre-compute the set of ALL shipids needed across all months
+    # to perform a quick first-pass filter on chunks
+    all_needed_shipids = {t[2] for t in valid_combinations}
 
     for path in iterator:
+
         reader = pd.read_csv(
             path,
-            sep=";",
+            sep=";",  # or None to use python sniffing, but fixed sep is faster
             usecols=ASTD_USEFUL_COLS,
             dtype=ASTD_DTYPE_MAP,
             low_memory=False,
             chunksize=chunksize,
         )
 
-        # reader is a TextFileReader → iterable of chunks
         for chunk in reader:
             if chunk is None or chunk.empty:
                 continue
 
-            # Standardization + dates (as in load_astd_data)
             chunk = standardize_columns(chunk)
-            chunk = parse_dates(chunk)
 
             if "shipid" not in chunk.columns:
                 continue
 
-            # Filter only the segments of this track
-            mask = chunk["shipid"].astype(str).isin(seg_ids_str)
-            sub = chunk.loc[mask]
-            if not sub.empty:
-                frames.append(sub)
+            mask = chunk["shipid"].astype(str).isin(all_needed_shipids)
+            sub = chunk.loc[mask].copy()
+
+            if sub.empty:
+                continue
+
+            sub = parse_dates(sub)
+
+            frames.append(sub)
 
     if not frames:
         return pd.DataFrame()
 
-    out = pd.concat(frames, ignore_index=True)
+    raw_data = pd.concat(frames, ignore_index=True)
+
+
+
+    raw_data["month_str"] = raw_data["date_time_utc"].dt.strftime("%Y-%m")
+
+    tt_subset[seg_col] = tt_subset[seg_col].astype(str)
+
+    tt_subset["month_join"] = tt_subset["month_dt"].dt.strftime("%Y-%m")
+
+    raw_data["shipid_str"] = raw_data["shipid"].astype(str)
+
+    merged = raw_data.merge(
+        tt_subset[["track_id", seg_col, "month_join"]],
+        left_on=["month_str", "shipid_str"],
+        right_on=["month_join", seg_col],
+        how="inner"  # Inner join keeps only the positions that are valid for the requested tracks/months
+    )
+
+    cols_to_drop = ["month_str", "month_join", "shipid_str"]
+    if seg_col != "shipid":
+        cols_to_drop.append(seg_col)
+
+    merged = merged.drop(columns=cols_to_drop, errors="ignore")
+
+    if "date_time_utc" in merged.columns:
+        merged = merged.sort_values(["track_id", "date_time_utc"]).reset_index(drop=True)
 
     if use_preprocessing:
-        out = remove_unrealistic_points(out)
+        merged = remove_unrealistic_points(merged)
 
-    # Temporal sorting useful for visualization
-    if "date_time_utc" in out.columns:
-        out = out.sort_values("date_time_utc").reset_index(drop=True)
-
-    return out
+    return merged
 
 
 def build_light_multi_track_data(
         track_table: pd.DataFrame,
-        track_sampling: Union[int, Sequence[int]],
+        track_sampling: Optional[Union[int, Sequence[int]]] = None,
         *,
+        specific_track_ids: Optional[Sequence[Union[int, str]]] = None,
         positions_df: Optional[pd.DataFrame] = None,
         n_tracks_length: Optional[int] = None,
         base_path: Optional[Pathish] = None,
@@ -284,6 +326,7 @@ def build_light_multi_track_data(
         progress: bool = True,
         point_stride: int = 10,
         random_state: Optional[int] = 42,
+        preprocess_positions: bool = True,
 ) -> pd.DataFrame:
     """
     Build a 'light' DataFrame with positions for multiple tracks,
@@ -338,11 +381,30 @@ def build_light_multi_track_data(
     if not candidate_ids:
         return pd.DataFrame()
 
-    # sample track_ids
-    candidate_ids_sorted = sorted(candidate_ids)
+    # Define a default sampling if nothing is provided (Safety net)
+    if specific_track_ids is None and track_sampling is None:
+        track_sampling = 20  # Default behavior: grab 20 random tracks
+        print("Info: No selection criteria provided. Defaulting to random sampling of 20 tracks.")
 
-    if isinstance(track_sampling, (list, tuple)) and len(track_sampling) == 2:
+    selected_ids = []
+
+    # Case 1: Explicit selection via specific IDs (Priority)
+    if specific_track_ids is not None:
+        # Create a set for fast lookup to ensure valid IDs
+        candidate_set = set(candidate_ids)
+
+        # Keep only the IDs that actually exist in the track_table
+        selected_ids = [tid for tid in specific_track_ids if tid in candidate_set]
+
+        if not selected_ids:
+            print("Warning: None of the requested track_ids were found in the track_table.")
+            return pd.DataFrame()
+
+    # Case 2: Slicing / Interval (e.g., [0, 100])
+    elif isinstance(track_sampling, (list, tuple)) and len(track_sampling) == 2:
+        candidate_ids_sorted = sorted(candidate_ids)
         start, end = track_sampling
+
         if start < 0:
             raise ValueError("start index in track_sampling must be >= 0")
 
@@ -352,24 +414,32 @@ def build_light_multi_track_data(
         if end < start:
             raise ValueError("end index must be >= start index in track_sampling")
 
+        # Clamp the end index to the list boundaries
         end = min(end, len(candidate_ids_sorted) - 1)
         selected_ids = candidate_ids_sorted[start:end + 1]
 
+    # Case 3: Random sampling (Integer)
     elif isinstance(track_sampling, int):
+        candidate_ids_sorted = sorted(candidate_ids)
         k = track_sampling
+
         if k <= 0:
             raise ValueError("track_sampling int must be > 0")
 
         if k >= len(candidate_ids):
+            # If requested samples > available tracks, return all
             selected_ids = candidate_ids_sorted
         else:
             if random_state is not None:
                 np.random.seed(random_state)
+
+            # Randomly choose k tracks without replacement
             selected_ids = list(np.random.choice(candidate_ids_sorted, size=k, replace=False))
+
     else:
         raise TypeError(
-            "track_sampling must be either an int or a list/tuple of length 2 "
-            "(e.g., [0, 100], [0, -1], or 20)."
+            "Invalid arguments: 'track_sampling' must be an int or a list/tuple of length 2, "
+            "unless 'specific_track_ids' is provided."
         )
 
     if not selected_ids:
@@ -387,40 +457,39 @@ def build_light_multi_track_data(
         if "month" not in df_pos.columns:
             df_pos["month"] = pd.to_datetime(df_pos["date_time_utc"]).dt.strftime("%Y-%m")
 
-    # Load / filter positions for each track and concatenate
-    all_frames: list[pd.DataFrame] = []
 
-    for tid in selected_ids:
-        if df_pos is None:
-            # --- Mode reading from disk ---
-            df_t = load_track_data(track_id=tid, track_table=track_table, base_path=base_path, progress=progress,
-                                   chunksize=chunksize)
-        else:
-            # --- Mode filtering in already loaded positions_df ---
-            tt_tid = track_table[track_table["track_id"] == tid][["month", "segment_id"]].copy()
-            if tt_tid.empty:
-                continue
+    if df_pos is None:
+        # Mode 1: Read from disk (BATCH MODE)
+        # We pass the full list of selected_ids at once.
+        # This triggers the optimized single-pass file reading.
+        work = load_track_data(
+            track_ids=selected_ids,
+            track_table=track_table,
+            base_path=base_path,
+            progress=progress,
+            chunksize=chunksize
+        )
 
-            df_t = df_pos.merge(
-                tt_tid,
-                left_on=["month", "shipid"],
-                right_on=["month", "segment_id"],
-                how="inner",
-            )
-            # You can remove segment_id from the final merge if you want
-            df_t = df_t.drop(columns=["segment_id"], errors="ignore")
+    else:
+        # Mode 2: Filtering pre-loaded dataframe (unchanged logic, just vectorized)
+        tt_subset = track_table[track_table["track_id"].isin(selected_ids)][["month", "segment_id", "track_id"]].copy()
 
-        if df_t is None or df_t.empty:
-            continue
+        if tt_subset.empty:
+            return pd.DataFrame()
 
-        df_t = df_t.copy()
-        df_t["track_id"] = tid
-        all_frames.append(df_t)
+        work = df_pos.merge(
+            tt_subset,
+            left_on=["month", "shipid"],
+            right_on=["month", "segment_id"],
+            how="inner",
+        )
+        work = work.drop(columns=["segment_id"], errors="ignore")
 
-    if not all_frames:
+        if preprocess_positions:
+            work = remove_unrealistic_points(work)
+
+    if work is None or work.empty:
         return pd.DataFrame()
-
-    work = pd.concat(all_frames, ignore_index=True)
 
     # Subsample points per track by point_stride
     if "date_time_utc" not in work.columns:
@@ -436,17 +505,6 @@ def build_light_multi_track_data(
     # if {"latitude", "longitude"}.issubset(work.columns):
     #     work = work.query("latitude >= 60 and longitude >= -80 and longitude <= 40")
 
-    # Remove large jumps per track 
-    # def remove_big_jumps(g: pd.DataFrame, max_deg: float = 10.0) -> pd.DataFrame:
-    #     g = g.sort_values("date_time_utc")
-    #     if "latitude" not in g.columns or "longitude" not in g.columns:
-    #         return g
-    #     dlat = g["latitude"].diff().abs()
-    #     dlon = g["longitude"].diff().abs()
-    #     mask = dlat.isna() | ((dlat <= max_deg) & (dlon <= max_deg))
-    #     return g[mask]
-    #
-    # work = work.groupby("track_id", group_keys=False).apply(remove_big_jumps)
     work = work.reset_index(drop=True)
 
     return work
