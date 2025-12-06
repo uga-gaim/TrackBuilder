@@ -214,44 +214,64 @@ def get_segment_summaries(df: pd.DataFrame) -> pd.DataFrame:
                    start_lat, start_lon, end_lat, end_lon, astd_cat, flagname,
                    iceclass, sizegroup_gt, ship_signature
     """
+    # Work on a copy to avoid SettingWithCopy warnings
+    df = df.copy()
+
+    # 1. Ensure datetime format
+    if not pd.api.types.is_datetime64_any_dtype(df['date_time_utc']):
+        df['date_time_utc'] = pd.to_datetime(df['date_time_utc'], utc=True)
+
+    # 2. Create a period column for monthly grouping
+    # This ensures Jan data is separated from Feb data for the same ship
+    df['period_month'] = df['date_time_utc'].dt.to_period('M')
+
     segments = []
 
-    print(f"Creating segments for {df['shipid'].nunique()} unique shipids")
+    # 3. Group by ShipID AND Month
+    grouped = df.groupby(['shipid', 'period_month'])
 
-    for ship_id in df['shipid'].unique():
-        ship_data = df[df['shipid'] == ship_id].copy()
-        ship_data = ship_data.sort_values('date_time_utc')
+    print(f"Creating segments for {len(grouped)} unique ship-months (segments)...")
 
-        if len(ship_data) == 0:
+    # 4. Iterate through groups
+    for (ship_id, period), group in grouped:
+        # Sort is essential to identify the true start and end of the segment
+        group = group.sort_values('date_time_utc')
+        
+        if len(group) == 0:
             continue
 
-        # Get time period and position info
-        start_time = ship_data['date_time_utc'].iloc[0]
-        end_time = ship_data['date_time_utc'].iloc[-1]
-        month = start_time.strftime('%Y-%m')  # Use start month for grouping
+        # Extract boundaries (first and last row of the month)
+        start_row = group.iloc[0]
+        end_row = group.iloc[-1]
+        
+        # Format month as string "YYYY-MM" for compatibility
+        month_str = str(period)
 
         segment = {
             'shipid': ship_id,
-            'month': month,
-            'start_time': start_time,
-            'end_time': end_time,
-            'start_lat': ship_data['latitude'].iloc[0],
-            'start_lon': ship_data['longitude'].iloc[0],
-            'end_lat': ship_data['latitude'].iloc[-1],
-            'end_lon': ship_data['longitude'].iloc[-1],
-            'astd_cat': ship_data['astd_cat'].iloc[0],
-            'flagname': ship_data['flagname'].iloc[0],
-            'iceclass': ship_data['iceclass'].iloc[0],
-            'sizegroup_gt': ship_data['sizegroup_gt'].iloc[0],
-            # Add ship characteristics signature for matching
-            'ship_signature': create_ship_signature(ship_data.iloc[0])
+            'month': month_str,
+            'start_time': start_row['date_time_utc'],
+            'end_time': end_row['date_time_utc'],
+            'start_lat': start_row['latitude'],
+            'start_lon': start_row['longitude'],
+            'end_lat': end_row['latitude'],
+            'end_lon': end_row['longitude'],
+            # Safe metadata retrieval
+            'astd_cat': start_row.get('astd_cat', 'unknown'),
+            'flagname': start_row.get('flagname', 'unknown'),
+            'iceclass': start_row.get('iceclass', 'unknown'),
+            'sizegroup_gt': start_row.get('sizegroup_gt', 'unknown'),
+            # Signature for matching logic
+            'ship_signature': create_ship_signature(start_row)
         }
         segments.append(segment)
 
+    # 5. Create final DataFrame
     result_df = pd.DataFrame(segments)
-    print(f"Created {len(result_df)} segments")
+    
+    print(f"Successfully created {len(result_df)} monthly segments.")
     if len(result_df) > 0:
-        print(f"Sample segment: {result_df.iloc[0]['ship_signature']}")
+        print(f"Sample segment: {result_df.iloc[0]['ship_signature']} in {result_df.iloc[0]['month']}")
 
     return result_df
 
