@@ -22,6 +22,7 @@ from __future__ import annotations
 from track_builder.io.astd_loader import (
     load_astd_data,
     load_astd_monthly,
+    load_astd_periods,
     load_track_data,
     build_light_multi_track_data
 )
@@ -33,7 +34,7 @@ from track_builder.visualization.visualizer import (
 
 from track_builder.core.vis_helpers import export_figure
 
-from track_builder.core.track_helpers import compute_typical_speeds_by_astd_cat, remove_unrealistic_points
+from track_builder.core.track_helpers import compute_typical_speeds_by_astd_cat, remove_unrealistic_points, points_to_lines
 
 from track_builder.track import (
     build_ship_tracks,
@@ -44,6 +45,7 @@ from track_builder.track import (
 __all__ = [
     "load_astd_data",
     "load_astd_monthly",
+    "load_astd_periods",
     "load_track_data",
     "build_light_multi_track_data",
     "plot_ship_tracks",
@@ -54,4 +56,5 @@ __all__ = [
     "get_track_statistics",
     "compute_typical_speeds_by_astd_cat",
     "remove_unrealistic_points",
+    "points_to_lines",
 ]

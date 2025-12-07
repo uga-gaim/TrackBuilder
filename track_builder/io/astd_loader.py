@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Optional, Union, List, Any, Sequence
+from typing import Iterable, Optional, Union, List, Any, Sequence, Dict
 import pandas as pd
 import numpy as np
 
@@ -143,6 +143,53 @@ def load_astd_monthly(
         return pd.DataFrame()  # Return empty dataFrame
 
     return load_astd_data(selected_files, progress=progress, **kwargs)
+
+
+def load_astd_periods(base_path: str, periods: Dict[int, List[int]], **kwargs) -> pd.DataFrame:
+    """
+    Loads and merges ASTD data for specific years and months.
+    
+    Args:
+        base_path (str): Root directory containing the ASTD CSV files.
+        periods (dict): Dictionary mapping year (int) to a list of months (list[int]).
+                        Example: {2019: [10, 11, 12], 2020: [1, 2, 3]}
+        **kwargs: Additional arguments passed to the underlying load_astd_monthly function
+                  (e.g., usecols, progress, quality_threshold_minutes).
+    
+    Returns:
+        pd.DataFrame: A single concatenated DataFrame, sorted by time.
+    """
+    frames = []
+    
+    # Iterate over each year defined in the configuration dictionary
+    for year, months in periods.items():
+        print(f"Loading data for year {year}, months: {months}...")
+        
+        # Call the existing loader from the track_builder API
+        df_year = load_astd_monthly(
+            base_path=base_path,
+            year=year,
+            months=months,
+            **kwargs
+        )
+        
+        # Only append if data was actually found
+        if not df_year.empty:
+            frames.append(df_year)
+    
+    if not frames:
+        print("Warning: No data loaded.")
+        return pd.DataFrame()
+
+    # Concatenate all frames into one continuous dataset
+    print("Merging datasets...")
+    full_df = pd.concat(frames, ignore_index=True)
+    
+    # Time sorting is critical for the track building algorithm to work correctly
+    if "date_time_utc" in full_df.columns:
+        full_df = full_df.sort_values("date_time_utc").reset_index(drop=True)
+        
+    return full_df
 
 
 def load_track_data(

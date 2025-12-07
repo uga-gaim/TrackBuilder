@@ -1,5 +1,9 @@
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+from shapely.geometry import LineString
+
+
 from track_builder.config import _LIT_CAPS_KMH
 
 
@@ -560,3 +564,86 @@ def filter_attr_consistency_tolerant(
         # if all candidate values are missing -> nothing to do for this attribute
 
     return df
+
+
+
+# Dans track_builder/core/track_helpers.py
+
+def points_to_lines(df: pd.DataFrame, group_by: str = 'track_id', take_first: list = None) -> gpd.GeoDataFrame:
+    """
+    Convert a dataframe of point coordinates into a GeoDataFrame of line geometries.
+    
+    Provided by supervision for merging points to lines.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input dataframe with columns: shipid, date_time_utc, longitude, latitude.
+    group_by : str, optional (default='track_id')
+        Column to group by. Must be either 'track_id' or 'shipid'.
+    take_first : list, optional
+        List of columns to take the first value from each group (metadata).
+        Default is ["flagname", "iceclass", "astd_cat", "sizegroup_gt"].
+    
+    Returns:
+    --------
+    gpd.GeoDataFrame
+        GeoDataFrame with LineString geometries and aggregated attributes.
+    """
+    # Validate group_by argument
+    if group_by not in ['track_id', 'shipid']:
+        raise ValueError("group_by must be either 'track_id' or 'shipid'")
+    
+    # Set default take_first if not provided
+    if take_first is None:
+        take_first = ["flagname", "iceclass", "astd_cat", "sizegroup_gt"]
+    else:
+        take_first = take_first.copy()
+    
+    # If grouping by shipid, add track_id to take_first if not already present
+    if group_by == 'shipid' and 'track_id' in df.columns and 'track_id' not in take_first:
+        take_first.append('track_id')
+    
+    # Create a copy to avoid SettingWithCopyWarning
+    df = df.copy()
+    
+    # Ensure date_time_utc is datetime type
+    if not pd.api.types.is_datetime64_any_dtype(df['date_time_utc']):
+        df['date_time_utc'] = pd.to_datetime(df['date_time_utc'])
+    
+    # Sort by group_by and date_time_utc to ensure correct line topology
+    df = df.sort_values([group_by, 'date_time_utc'])
+    
+    grouped = df.groupby(group_by)
+    results = []
+    
+    for group_id, group_df in grouped:
+        # Skip groups with less than 2 points (cannot make a line)
+        if len(group_df) < 2:
+            continue
+        
+        # Create LineString from coordinates
+        coords = list(zip(group_df['longitude'], group_df['latitude']))
+        line = LineString(coords)
+        
+        # Create result dictionary
+        result = {group_by: group_id}
+        
+        # Add first values for specified columns (metadata preservation)
+        for col in take_first:
+            if col in group_df.columns:
+                result[col] = group_df[col].iloc[0]
+        
+        # Add start and end times
+        result['start'] = group_df['date_time_utc'].iloc[0]
+        result['end'] = group_df['date_time_utc'].iloc[-1]
+        
+        # Add geometry
+        result['geometry'] = line
+        
+        results.append(result)
+    
+    # Create GeoDataFrame
+    gdf = gpd.GeoDataFrame(results, crs='EPSG:4326')
+    
+    return gdf
