@@ -6,7 +6,7 @@ from typing import Iterable, Optional, Union, List, Any, Sequence, Dict
 import pandas as pd
 import numpy as np
 
-from track_builder.core.track_helpers import remove_unrealistic_points
+from track_builder.core.track_helpers import remove_unrealistic_points, mask_dateline_jumps
 
 from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP
 # Internal helper imports
@@ -374,6 +374,7 @@ def build_light_multi_track_data(
         point_stride: int = 10,
         random_state: Optional[int] = 42,
         preprocess_positions: bool = True,
+        use_mask_dateline_jumps: bool = True,
 ) -> pd.DataFrame:
     """
     Build a 'light' DataFrame with positions for multiple tracks,
@@ -553,5 +554,9 @@ def build_light_multi_track_data(
     #     work = work.query("latitude >= 60 and longitude >= -80 and longitude <= 40")
 
     work = work.reset_index(drop=True)
+
+    if use_mask_dateline_jumps:
+        work = mask_dateline_jumps(work)
+
 
     return work

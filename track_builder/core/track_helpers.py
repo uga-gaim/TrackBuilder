@@ -567,7 +567,54 @@ def filter_attr_consistency_tolerant(
 
 
 
-# Dans track_builder/core/track_helpers.py
+def mask_dateline_jumps(df, lon_col='longitude', track_col='track_id', threshold=300):
+    """
+    Detects jumps across the International Date Line and inserts NaN values
+    to break the line visually in Plotly/Matplotlib without changing track IDs.
+    
+    This prevents the "horizontal line" artifact while keeping the track
+    as a single logical entity with a consistent color.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input dataframe containing ship tracks.
+    lon_col : str
+        Name of the longitude column.
+    track_col : str
+        Name of the track identifier column.
+    threshold : float
+        Longitude difference threshold to treat as a Date Line crossing (default 300).
+        
+    Returns:
+    --------
+    pd.DataFrame
+        A copy of the dataframe with NaNs inserted at jump points.
+    """
+    # Work on a copy to protect original data
+    df_viz = df.copy()
+    
+    # Ensure sorting for sequential calc
+    if 'date_time_utc' in df_viz.columns:
+        df_viz = df_viz.sort_values([track_col, 'date_time_utc'])
+
+    # Calculate longitude difference between consecutive points of the same track
+    # shift(1) aligns row i with row i-1
+    prev_lon = df_viz.groupby(track_col)[lon_col].shift(1)
+    diff = (df_viz[lon_col] - prev_lon).abs()
+    
+    # Identify rows where the jump happens
+    is_jump = diff > threshold
+    
+    n_jumps = is_jump.sum()
+    if n_jumps > 0:
+        # We replace the coordinates of the *jump point* with NaN.
+        # Plotly/Matplotlib will automatically "lift the pen" when encountering NaN.
+        print(f"Info: Masking {n_jumps} Date Line crossing points for clean visualization.")
+        df_viz.loc[is_jump, lon_col] = np.nan
+        df_viz.loc[is_jump, 'latitude'] = np.nan
+    
+    return df_viz
 
 def points_to_lines(df: pd.DataFrame, group_by: str = 'track_id', take_first: list = None) -> gpd.GeoDataFrame:
     """
