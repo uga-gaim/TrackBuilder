@@ -1,5 +1,9 @@
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+from shapely.geometry import LineString
+
+
 from track_builder.config import _LIT_CAPS_KMH
 
 
@@ -214,44 +218,64 @@ def get_segment_summaries(df: pd.DataFrame) -> pd.DataFrame:
                    start_lat, start_lon, end_lat, end_lon, astd_cat, flagname,
                    iceclass, sizegroup_gt, ship_signature
     """
+    # Work on a copy to avoid SettingWithCopy warnings
+    df = df.copy()
+
+    # 1. Ensure datetime format
+    if not pd.api.types.is_datetime64_any_dtype(df['date_time_utc']):
+        df['date_time_utc'] = pd.to_datetime(df['date_time_utc'], utc=True)
+
+    # 2. Create a period column for monthly grouping
+    # This ensures Jan data is separated from Feb data for the same ship
+    df['period_month'] = df['date_time_utc'].dt.to_period('M')
+
     segments = []
 
-    print(f"Creating segments for {df['shipid'].nunique()} unique shipids")
+    # 3. Group by ShipID AND Month
+    grouped = df.groupby(['shipid', 'period_month'])
 
-    for ship_id in df['shipid'].unique():
-        ship_data = df[df['shipid'] == ship_id].copy()
-        ship_data = ship_data.sort_values('date_time_utc')
+    print(f"Creating segments for {len(grouped)} unique ship-months (segments)...")
 
-        if len(ship_data) == 0:
+    # 4. Iterate through groups
+    for (ship_id, period), group in grouped:
+        # Sort is essential to identify the true start and end of the segment
+        group = group.sort_values('date_time_utc')
+        
+        if len(group) == 0:
             continue
 
-        # Get time period and position info
-        start_time = ship_data['date_time_utc'].iloc[0]
-        end_time = ship_data['date_time_utc'].iloc[-1]
-        month = start_time.strftime('%Y-%m')  # Use start month for grouping
+        # Extract boundaries (first and last row of the month)
+        start_row = group.iloc[0]
+        end_row = group.iloc[-1]
+        
+        # Format month as string "YYYY-MM" for compatibility
+        month_str = str(period)
 
         segment = {
             'shipid': ship_id,
-            'month': month,
-            'start_time': start_time,
-            'end_time': end_time,
-            'start_lat': ship_data['latitude'].iloc[0],
-            'start_lon': ship_data['longitude'].iloc[0],
-            'end_lat': ship_data['latitude'].iloc[-1],
-            'end_lon': ship_data['longitude'].iloc[-1],
-            'astd_cat': ship_data['astd_cat'].iloc[0],
-            'flagname': ship_data['flagname'].iloc[0],
-            'iceclass': ship_data['iceclass'].iloc[0],
-            'sizegroup_gt': ship_data['sizegroup_gt'].iloc[0],
-            # Add ship characteristics signature for matching
-            'ship_signature': create_ship_signature(ship_data.iloc[0])
+            'month': month_str,
+            'start_time': start_row['date_time_utc'],
+            'end_time': end_row['date_time_utc'],
+            'start_lat': start_row['latitude'],
+            'start_lon': start_row['longitude'],
+            'end_lat': end_row['latitude'],
+            'end_lon': end_row['longitude'],
+            # Safe metadata retrieval
+            'astd_cat': start_row.get('astd_cat', 'unknown'),
+            'flagname': start_row.get('flagname', 'unknown'),
+            'iceclass': start_row.get('iceclass', 'unknown'),
+            'sizegroup_gt': start_row.get('sizegroup_gt', 'unknown'),
+            # Signature for matching logic
+            'ship_signature': create_ship_signature(start_row)
         }
         segments.append(segment)
 
+    # 5. Create final DataFrame
     result_df = pd.DataFrame(segments)
-    print(f"Created {len(result_df)} segments")
+    
+    print(f"Successfully created {len(result_df)} monthly segments.")
     if len(result_df) > 0:
-        print(f"Sample segment: {result_df.iloc[0]['ship_signature']}")
+        print(f"Sample segment: {result_df.iloc[0]['ship_signature']} in {result_df.iloc[0]['month']}")
 
     return result_df
 
@@ -540,3 +564,133 @@ def filter_attr_consistency_tolerant(
         # if all candidate values are missing -> nothing to do for this attribute
 
     return df
+
+
+
+def mask_dateline_jumps(df, lon_col='longitude', track_col='track_id', threshold=300):
+    """
+    Detects jumps across the International Date Line and inserts NaN values
+    to break the line visually in Plotly/Matplotlib without changing track IDs.
+    
+    This prevents the "horizontal line" artifact while keeping the track
+    as a single logical entity with a consistent color.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input dataframe containing ship tracks.
+    lon_col : str
+        Name of the longitude column.
+    track_col : str
+        Name of the track identifier column.
+    threshold : float
+        Longitude difference threshold to treat as a Date Line crossing (default 300).
+        
+    Returns:
+    --------
+    pd.DataFrame
+        A copy of the dataframe with NaNs inserted at jump points.
+    """
+    # Work on a copy to protect original data
+    df_viz = df.copy()
+    
+    # Ensure sorting for sequential calc
+    if 'date_time_utc' in df_viz.columns:
+        df_viz = df_viz.sort_values([track_col, 'date_time_utc'])
+
+    # Calculate longitude difference between consecutive points of the same track
+    # shift(1) aligns row i with row i-1
+    prev_lon = df_viz.groupby(track_col)[lon_col].shift(1)
+    diff = (df_viz[lon_col] - prev_lon).abs()
+    
+    # Identify rows where the jump happens
+    is_jump = diff > threshold
+    
+    n_jumps = is_jump.sum()
+    if n_jumps > 0:
+        # We replace the coordinates of the *jump point* with NaN.
+        # Plotly/Matplotlib will automatically "lift the pen" when encountering NaN.
+        print(f"Info: Masking {n_jumps} Date Line crossing points for clean visualization.")
+        df_viz.loc[is_jump, lon_col] = np.nan
+        df_viz.loc[is_jump, 'latitude'] = np.nan
+    
+    return df_viz
+
+def points_to_lines(df: pd.DataFrame, group_by: str = 'track_id', take_first: list = None) -> gpd.GeoDataFrame:
+    """
+    Convert a dataframe of point coordinates into a GeoDataFrame of line geometries.
+    
+    Provided by supervision for merging points to lines.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input dataframe with columns: shipid, date_time_utc, longitude, latitude.
+    group_by : str, optional (default='track_id')
+        Column to group by. Must be either 'track_id' or 'shipid'.
+    take_first : list, optional
+        List of columns to take the first value from each group (metadata).
+        Default is ["flagname", "iceclass", "astd_cat", "sizegroup_gt"].
+    
+    Returns:
+    --------
+    gpd.GeoDataFrame
+        GeoDataFrame with LineString geometries and aggregated attributes.
+    """
+    # Validate group_by argument
+    if group_by not in ['track_id', 'shipid']:
+        raise ValueError("group_by must be either 'track_id' or 'shipid'")
+    
+    # Set default take_first if not provided
+    if take_first is None:
+        take_first = ["flagname", "iceclass", "astd_cat", "sizegroup_gt"]
+    else:
+        take_first = take_first.copy()
+    
+    # If grouping by shipid, add track_id to take_first if not already present
+    if group_by == 'shipid' and 'track_id' in df.columns and 'track_id' not in take_first:
+        take_first.append('track_id')
+    
+    # Create a copy to avoid SettingWithCopyWarning
+    df = df.copy()
+    
+    # Ensure date_time_utc is datetime type
+    if not pd.api.types.is_datetime64_any_dtype(df['date_time_utc']):
+        df['date_time_utc'] = pd.to_datetime(df['date_time_utc'])
+    
+    # Sort by group_by and date_time_utc to ensure correct line topology
+    df = df.sort_values([group_by, 'date_time_utc'])
+    
+    grouped = df.groupby(group_by)
+    results = []
+    
+    for group_id, group_df in grouped:
+        # Skip groups with less than 2 points (cannot make a line)
+        if len(group_df) < 2:
+            continue
+        
+        # Create LineString from coordinates
+        coords = list(zip(group_df['longitude'], group_df['latitude']))
+        line = LineString(coords)
+        
+        # Create result dictionary
+        result = {group_by: group_id}
+        
+        # Add first values for specified columns (metadata preservation)
+        for col in take_first:
+            if col in group_df.columns:
+                result[col] = group_df[col].iloc[0]
+        
+        # Add start and end times
+        result['start'] = group_df['date_time_utc'].iloc[0]
+        result['end'] = group_df['date_time_utc'].iloc[-1]
+        
+        # Add geometry
+        result['geometry'] = line
+        
+        results.append(result)
+    
+    # Create GeoDataFrame
+    gdf = gpd.GeoDataFrame(results, crs='EPSG:4326')
+    
+    return gdf

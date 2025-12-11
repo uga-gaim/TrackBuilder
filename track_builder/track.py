@@ -194,12 +194,12 @@ def _generate_and_score_candidates(cur: pd.Series,
 
     c['match_score_simple'] = opts.w_time * dt_norm + opts.w_dist * dd_norm + opts.w_speed * vr + penalty
 
-    # 4) Optional: improved score from _core (may fail)
-    try:
-        c2 = calculate_improved_match_score(c.copy(), ship_type, cur)
-        c['match_score_core'] = c2['match_score'] if 'match_score' in c2 else np.nan
-    except Exception:
-        c['match_score_core'] = np.nan
+    # # 4) Optional: improved score from _core (may fail)
+    # try:
+    #     c2 = calculate_improved_match_score(c.copy(), ship_type, cur)
+    #     c['match_score_core'] = c2['match_score'] if 'match_score' in c2 else np.nan
+    # except Exception:
+    #     c['match_score_core'] = np.nan
 
     # 5) Strategy threshold: prefer the improved core score when available, otherwise fall back to the simple score
     return c.sort_values(['match_score_simple', 'dt_hours', 'distance_km_fd']).reset_index(drop=True)
@@ -210,6 +210,7 @@ def _generate_and_score_candidates(cur: pd.Series,
 # =====================================================================
 
 def build_ship_tracks(
+    
         astd_data: pd.DataFrame,
         *,
         max_time_gap_hours: int = 96,
@@ -222,6 +223,7 @@ def build_ship_tracks(
         gap_days_no_penalty: float = 3.0,
         gap_penalty_per_day: float = 0.05,
         return_logs: bool = False,
+        typical_speeds: dict | None = None,
 ) -> pd.DataFrame | Tuple[pd.DataFrame, pd.DataFrame]:
     """Connect segments into continuous tracks using day gaps and structured logs.
 
@@ -248,7 +250,7 @@ def build_ship_tracks(
     score_threshold = _SCORE_THRESHOLDS[opts.matching_strategy]
     multipliers = _LIMIT_MULTIPLIERS[opts.matching_strategy]
 
-    speed_lookup = _compute_typical_speeds_from_data(astd_data)
+    speed_lookup = typical_speeds if typical_speeds is not None else _compute_typical_speeds_from_data(astd_data)
 
     # 3) Organize by month
     def _mkey(m: str) -> int:
