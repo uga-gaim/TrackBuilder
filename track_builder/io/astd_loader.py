@@ -8,7 +8,7 @@ import numpy as np
 
 from track_builder.core.track_helpers import remove_unrealistic_points, mask_dateline_jumps
 
-from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP
+from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP, ARCTIC_ZONES
 # Internal helper imports
 from track_builder.core.io_helpers import (
     DEFAULT_DATA_PATH,
@@ -375,6 +375,7 @@ def build_light_multi_track_data(
         random_state: Optional[int] = 42,
         preprocess_positions: bool = True,
         # use_mask_dateline_jumps: bool = True,
+        region: Optional[str] = None,  # e.g., "canada", "russia", "norway"
 ) -> pd.DataFrame:
     """
     Build a 'light' DataFrame with positions for multiple tracks,
@@ -548,6 +549,33 @@ def build_light_multi_track_data(
 
     if work is None or work.empty:
         return pd.DataFrame()
+    
+    # --- GEOGRAPHICAL FILTERING (Based on Region Name) ---
+    if region:
+        key = region.lower().strip()
+        if key not in ARCTIC_ZONES:
+            print(f"Warning: Region '{region}' not found in ARCTIC_ZONES (config.py). No filter applied.")
+            print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
+        else:
+            min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[key]
+            
+            # Filter Latitude
+            mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
+            
+            # Filter Longitude (Handle Date Line crossing)
+            if min_lon <= max_lon:
+                # Standard case (e.g. Canada, Norway)
+                mask_lon = (work["longitude"] >= min_lon) & (work["longitude"] <= max_lon)
+            else:
+                # Date Line Crossing (e.g. Russia: 50 -> -168)
+                # Logic: We want longitudes > 50 OR longitudes < -168
+                mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
+                
+            work = work.loc[mask_lat & mask_lon].copy()
+            
+            if work.empty:
+                print(f"Warning: No points found in region '{region}'")
+                return pd.DataFrame()
 
     # Subsample points per track by point_stride
     if "date_time_utc" not in work.columns:
