@@ -40,9 +40,9 @@ def plot_ship_tracks(
     zoom: Optional[float] = None,
     center: Optional[Dict[str, float]] = None,
     extra_cols_priority: Optional[Sequence[str]] = None,
-    # --- NOUVEAUX PARAMÈTRES ---
-    point_opacity: float = 1.0,      # Opacité des points (0.0 à 1.0)
-    fixed_color: Optional[str] = None # Couleur unique forcée (ex: "blue", "red")
+    point_opacity: float = 1.0,      
+    fixed_color: Optional[str] = None,
+    crossing_adl: bool = False,
 ) -> go.Figure:
     """
     Visualization of ASTD trajectories/positions.
@@ -75,6 +75,11 @@ def plot_ship_tracks(
 
     # Temporal sorting
     work = work.sort_values(tcol)
+
+    if crossing_adl:
+        work = work.copy() 
+        mask_neg = work[lon] < -150
+        work.loc[mask_neg, lon] = work.loc[mask_neg, lon] + 360
 
     # Color specification
     # Si fixed_color est utilisé, on ignore color_by pour le rendu
@@ -195,7 +200,6 @@ def plot_ship_tracks(
                 name="Positions",
             ))
 
-    # Rendu Carte
     if center is None:
         center = {"lat": float(work[lat].median()), "lon": float(work[lon].median())}
     if zoom is None:
@@ -224,28 +228,28 @@ def plot_ship_tracks(
 def plot_sampled_positions_unicolor_transparent(
     df: pd.DataFrame,
     *,
-    every_n: Optional[int] = 50,          # sampling: 1 point sur N (None -> pas de sampling)
-    max_points: Optional[int] = None,     # coupe dure si besoin
-    seed: int = 0,                        # utilisé seulement si on fait un sample aléatoire (optionnel)
-    bin_decimals: int = 3,                # ~0.001° ≈ 100m (à ajuster)
-    alpha_max: float = 0.45,              # opacité du point "en dessous"
-    alpha_min: float = 0.03,              # opacité minimale (point tout au-dessus)
-    decay: float = 0.85,                  # plus petit -> les points au-dessus deviennent vite transparents
+    every_n: Optional[int] = 50,          
+    max_points: Optional[int] = None,     
+    seed: int = 0,                       
+    bin_decimals: int = 3,                
+    alpha_max: float = 0.45,             
+    alpha_min: float = 0.03,             
+    decay: float = 0.85,                  
     size: int = 4,
-    rgb: tuple[int, int, int] = (0, 120, 255),   # bleu par défaut (unicolor)
+    rgb: tuple[int, int, int] = (0, 120, 255),   
     map_style: str = "open-street-map",
     height: int = 700,
     zoom: Optional[float] = None,
     center: Optional[Dict[str, float]] = None,
     title: Optional[str] = "Sampled ASTD positions (no tracks)",
-    hover: bool = False,                  # pour figures de conf: souvent False
+    hover: bool = False,                 
 ) -> go.Figure:
     """
-    Nuage de points (sans tracks), une seule couleur, avec transparence dépendante
-    de l'empilement local: dans chaque "bin" (lat/lon arrondis), les points sont
-    triés par temps; ceux affichés plus tard (au-dessus) deviennent plus transparents.
+    Point cloud (without tracks), single color, with transparency dependent on
+    local stacking: within each "bin" (rounded lat/lon), points are sorted by time;
+    those displayed later (on top) become more transparent.
 
-    - bin_decimals contrôle ce qu'on considère "même endroit" (approx).
+    - bin_decimals controls what we consider "same location" (approx).
     """
 
     if df is None or len(df) == 0:
@@ -260,28 +264,28 @@ def plot_sampled_positions_unicolor_transparent(
         work = work.iloc[::every_n].copy()
 
     if max_points is not None and len(work) > max_points:
-        # coupe dure mais stable: on garde uniformément
+        # hard cut but stable: we keep uniformly
         idx = np.linspace(0, len(work) - 1, max_points).astype(int)
         work = work.iloc[idx].copy()
 
-    # ---- "empilement" via bins lat/lon arrondis
-    # (plus robuste que "exact lat/lon", car les floats diffèrent souvent légèrement)
+    # ---- "stacking" via rounded lat/lon bins
+    # (more robust than "exact lat/lon", as floats often differ slightly)
     lat_bin = work[lat].round(bin_decimals)
     lon_bin = work[lon].round(bin_decimals)
     work["_bin"] = lat_bin.astype(str) + "_" + lon_bin.astype(str)
 
-    # Ordre d'empilement: tri temps => les derniers sont dessinés "au-dessus"
+    # Stacking order: time sort => the last ones are drawn "on top"
     work = work.sort_values([tcol])
 
-    # rang dans le bin: 0,1,2,... (donc 0 = en dessous)
+    # rank within the bin: 0,1,2,... (so 0 = below)
     work["_rank_in_bin"] = work.groupby("_bin").cumcount()
 
-    # opacité: décroît avec le rang (point au-dessus => plus transparent)
+    # opacity: decreases with rank (point on top => more transparent)
     # alpha(rank) = max(alpha_min, alpha_max * decay**rank)
     alpha = alpha_max * (decay ** work["_rank_in_bin"].to_numpy())
     alpha = np.clip(alpha, alpha_min, alpha_max)
 
-    # Couleur RGBA par point (unicolor mais alpha variable)
+    # RGBA color per point (unicolor but variable alpha)
     r, g, b = rgb
     colors = [f"rgba({r},{g},{b},{a:.4f})" for a in alpha]
 
@@ -332,8 +336,8 @@ def plot_sampled_positions_unicolor_transparent(
 
     fig.update_layout(**layout_kwargs)
 
-    # nettoyage colonnes temporaires (optionnel)
-    # (on ne modifie pas df original, donc pas critique)
+    # cleanup temporary columns (optional)
+    # (we don't modify original df, so not critical)
     return fig
 
 

@@ -367,14 +367,14 @@ def build_light_multi_track_data(
         *,
         specific_track_ids: Optional[Sequence[Union[int, str]]] = None,
         positions_df: Optional[pd.DataFrame] = None,
-        n_tracks_length: Optional[int] = None,
+        n_tracks_length: Optional[Union[int, Sequence[int]]] = None,
         base_path: Optional[Pathish] = None,
         chunksize: int = 50_000,
         progress: bool = True,
         point_stride: int = 10,
         random_state: Optional[int] = 42,
         preprocess_positions: bool = True,
-        use_mask_dateline_jumps: bool = True,
+        # use_mask_dateline_jumps: bool = True,
 ) -> pd.DataFrame:
     """
     Build a 'light' DataFrame with positions for multiple tracks,
@@ -423,7 +423,17 @@ def build_light_multi_track_data(
     candidate_ids = size_by_track.index
 
     if n_tracks_length is not None:
-        candidate_ids = candidate_ids[size_by_track.loc[candidate_ids] >= n_tracks_length]
+        if isinstance(n_tracks_length, (list, tuple)) and len(n_tracks_length) == 2:
+            min_l, max_l = n_tracks_length
+            #  min <= length <= max
+            candidate_ids = candidate_ids[
+                (size_by_track.loc[candidate_ids] >= min_l) &
+                (size_by_track.loc[candidate_ids] <= max_l)
+                ]
+        elif isinstance(n_tracks_length, (int, np.integer)):
+            candidate_ids = candidate_ids[size_by_track.loc[candidate_ids] >= n_tracks_length]
+        else:
+            print(f"Warning: Invalid format for n_tracks_length: {n_tracks_length}. Ignoring length filter.")
 
     candidate_ids = list(candidate_ids)
     if not candidate_ids:
@@ -555,8 +565,8 @@ def build_light_multi_track_data(
 
     work = work.reset_index(drop=True)
 
-    if use_mask_dateline_jumps:
-        work = mask_dateline_jumps(work)
+    # if use_mask_dateline_jumps:
+    #     work = mask_dateline_jumps(work)
 
 
     return work
