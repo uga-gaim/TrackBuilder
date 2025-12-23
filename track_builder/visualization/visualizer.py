@@ -42,7 +42,6 @@ def plot_ship_tracks(
     extra_cols_priority: Optional[Sequence[str]] = None,
     point_opacity: float = 1.0,      
     fixed_color: Optional[str] = None,
-    crossing_adl: bool = False,
 ) -> go.Figure:
     """
     Visualization of ASTD trajectories/positions.
@@ -76,10 +75,6 @@ def plot_ship_tracks(
     # Temporal sorting
     work = work.sort_values(tcol)
 
-    if crossing_adl:
-        work = work.copy() 
-        mask_neg = work[lon] < -150
-        work.loc[mask_neg, lon] = work.loc[mask_neg, lon] + 360
 
     # Color specification
     # Si fixed_color est utilisé, on ignore color_by pour le rendu
