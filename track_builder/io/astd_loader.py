@@ -8,7 +8,7 @@ import numpy as np
 
 from track_builder.core.track_helpers import remove_unrealistic_points, mask_dateline_jumps
 
-from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP
+from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP, ARCTIC_ZONES
 # Internal helper imports
 from track_builder.core.io_helpers import (
     DEFAULT_DATA_PATH,
@@ -367,14 +367,15 @@ def build_light_multi_track_data(
         *,
         specific_track_ids: Optional[Sequence[Union[int, str]]] = None,
         positions_df: Optional[pd.DataFrame] = None,
-        n_tracks_length: Optional[int] = None,
+        n_tracks_length: Optional[Union[int, Sequence[int]]] = None,
         base_path: Optional[Pathish] = None,
         chunksize: int = 50_000,
         progress: bool = True,
         point_stride: int = 10,
         random_state: Optional[int] = 42,
         preprocess_positions: bool = True,
-        use_mask_dateline_jumps: bool = True,
+        # use_mask_dateline_jumps: bool = True,
+        region: Optional[str] = None,  # e.g., "canada", "russia", "norway"
 ) -> pd.DataFrame:
     """
     Build a 'light' DataFrame with positions for multiple tracks,
@@ -423,7 +424,17 @@ def build_light_multi_track_data(
     candidate_ids = size_by_track.index
 
     if n_tracks_length is not None:
-        candidate_ids = candidate_ids[size_by_track.loc[candidate_ids] >= n_tracks_length]
+        if isinstance(n_tracks_length, (list, tuple)) and len(n_tracks_length) == 2:
+            min_l, max_l = n_tracks_length
+            #  min <= length <= max
+            candidate_ids = candidate_ids[
+                (size_by_track.loc[candidate_ids] >= min_l) &
+                (size_by_track.loc[candidate_ids] <= max_l)
+                ]
+        elif isinstance(n_tracks_length, (int, np.integer)):
+            candidate_ids = candidate_ids[size_by_track.loc[candidate_ids] >= n_tracks_length]
+        else:
+            print(f"Warning: Invalid format for n_tracks_length: {n_tracks_length}. Ignoring length filter.")
 
     candidate_ids = list(candidate_ids)
     if not candidate_ids:
@@ -538,6 +549,33 @@ def build_light_multi_track_data(
 
     if work is None or work.empty:
         return pd.DataFrame()
+    
+    # --- GEOGRAPHICAL FILTERING (Based on Region Name) ---
+    if region:
+        key = region.lower().strip()
+        if key not in ARCTIC_ZONES:
+            print(f"Warning: Region '{region}' not found in ARCTIC_ZONES (config.py). No filter applied.")
+            print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
+        else:
+            min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[key]
+            
+            # Filter Latitude
+            mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
+            
+            # Filter Longitude (Handle Date Line crossing)
+            if min_lon <= max_lon:
+                # Standard case (e.g. Canada, Norway)
+                mask_lon = (work["longitude"] >= min_lon) & (work["longitude"] <= max_lon)
+            else:
+                # Date Line Crossing (e.g. Russia: 50 -> -168)
+                # Logic: We want longitudes > 50 OR longitudes < -168
+                mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
+                
+            work = work.loc[mask_lat & mask_lon].copy()
+            
+            if work.empty:
+                print(f"Warning: No points found in region '{region}'")
+                return pd.DataFrame()
 
     # Subsample points per track by point_stride
     if "date_time_utc" not in work.columns:
@@ -555,8 +593,8 @@ def build_light_multi_track_data(
 
     work = work.reset_index(drop=True)
 
-    if use_mask_dateline_jumps:
-        work = mask_dateline_jumps(work)
+    # if use_mask_dateline_jumps:
+    #     work = mask_dateline_jumps(work)
 
 
     return work

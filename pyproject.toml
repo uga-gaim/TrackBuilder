@@ -3,6 +3,7 @@ name = "track_builder"
 version = "0.1"
 authors = [
   { name="Weiming Hu", email="weiming@uga.edu" },
+  { name="Mohamed Lamine Niang", email="niangmohamedlamine3@gmail.com" }
 ]
 description = "An algorithm to reconstruct ship tracks"
 readme = "README.md"

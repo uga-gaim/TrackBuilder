@@ -154,3 +154,17 @@ _LIMIT_MULTIPLIERS: Dict[MatchingStrategy, Tuple[float, float, float]] = {
 SPEED_TYPICALS_N_PER_DAY = 4        # n speed samples per day
 SPEED_TYPICALS_CLIP_KMH  = 80.0     # clip unrealistic speeds
 SPEED_TYP_MIN_POINTS     = 5        # min samples kept per ship
+
+
+# =====================================================================
+# Geographic Zones (Bounding Boxes)
+# Format: (min_lon, max_lon, min_lat, max_lat)
+# Note: If min_lon > max_lon, it indicates an International Date Line crossing.
+# =====================================================================
+ARCTIC_ZONES: Dict[str, Tuple[float, float, float, float]] = {
+    "canada": (-141.0, -50.0, 60.0, 85.0),   # Northwest Passage coverage
+    "norway": (5.0, 35.0, 60.0, 82.0),       # Barents Sea / Svalbard area
+    "russia": (50.0, -168.0, 65.0, 85.0),    # Northern Sea Route (crosses 180/-180)
+    "usa": (-170.0, -140.0, 60.0, 75.0),     # Alaska (Arctic region)
+    "iceland": (-25.0, -12.0, 63.0, 67.0),   # Iceland EEZ approx
+}
