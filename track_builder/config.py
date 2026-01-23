@@ -135,11 +135,12 @@ _LIT_CAPS_KMH: Dict[str, float] = {
 # =====================================================================
 MatchingStrategy = Literal["conservative", "balanced", "aggressive"]
 
-_SCORE_THRESHOLDS: Dict[MatchingStrategy, float] = {
-    "conservative": 0.40,
-    "balanced": 0.55,
-    "aggressive": 0.70,
-}
+# remove this one later
+# _SCORE_THRESHOLDS: Dict[MatchingStrategy, float] = {
+#     "conservative": 0.40,
+#     "balanced": 0.55,
+#     "aggressive": 0.70,
+# }
 
 _LIMIT_MULTIPLIERS: Dict[MatchingStrategy, Tuple[float, float, float]] = {
     # (time_gap, distance, speed)
