@@ -30,7 +30,7 @@ def plot_ship_tracks(
     color_lines: bool = False,
     max_categories: int = 20,
     show_points: bool = False,
-    show_start_end: bool = True,
+    show_start_end: bool = False,
     map_style: Optional[str] = None,
     title: Optional[str] = None,
     date_from: Optional[pd.Timestamp] = None,

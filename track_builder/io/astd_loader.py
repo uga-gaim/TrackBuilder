@@ -6,7 +6,7 @@ from typing import Iterable, Optional, Union, List, Any, Sequence, Dict
 import pandas as pd
 import numpy as np
 
-from track_builder.core.track_helpers import remove_unrealistic_points, mask_dateline_jumps
+from track_builder.core.track_helpers import remove_unrealistic_points, points_to_lines
 
 from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP, ARCTIC_ZONES
 # Internal helper imports
@@ -376,6 +376,7 @@ def build_light_multi_track_data(
         preprocess_positions: bool = True,
         # use_mask_dateline_jumps: bool = True,
         region: Optional[str] = None,  # e.g., "canada", "russia", "norway"
+        bounding_box: Optional[Union[str, Any]] = None,
 ) -> pd.DataFrame:
     """
     Build a 'light' DataFrame with positions for multiple tracks,
@@ -414,6 +415,10 @@ def build_light_multi_track_data(
 
     random_state : int or None
         Seed for random sampling of track_id (when track_sampling is an int).
+
+    bounding_box_file : str, optional
+        Path to a vector file (Shapefile, GeoJSON) defining a zone of interest.
+        Only tracks that intersect with this zone will be kept.
     """
 
     for col in ("track_id", "segment_id", "month"):
@@ -516,7 +521,6 @@ def build_light_multi_track_data(
         if "month" not in df_pos.columns:
             df_pos["month"] = pd.to_datetime(df_pos["date_time_utc"]).dt.strftime("%Y-%m")
 
-
     if df_pos is None:
         # Mode 1: Read from disk (BATCH MODE)
         # We pass the full list of selected_ids at once.
@@ -549,7 +553,7 @@ def build_light_multi_track_data(
 
     if work is None or work.empty:
         return pd.DataFrame()
-    
+
     # --- GEOGRAPHICAL FILTERING (Based on Region Name) ---
     if region:
         key = region.lower().strip()
@@ -558,10 +562,10 @@ def build_light_multi_track_data(
             print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
         else:
             min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[key]
-            
+
             # Filter Latitude
             mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
-            
+
             # Filter Longitude (Handle Date Line crossing)
             if min_lon <= max_lon:
                 # Standard case (e.g. Canada, Norway)
@@ -570,13 +574,69 @@ def build_light_multi_track_data(
                 # Date Line Crossing (e.g. Russia: 50 -> -168)
                 # Logic: We want longitudes > 50 OR longitudes < -168
                 mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
-                
+
             work = work.loc[mask_lat & mask_lon].copy()
-            
+
             if work.empty:
                 print(f"Warning: No points found in region '{region}'")
                 return pd.DataFrame()
 
+    # --- GEOGRAPHICAL FILTERING (Based on Shapefile/Bounding Box) ---
+    if bounding_box is not None:
+        try:
+            import geopandas as gpd
+            from shapely.geometry.base import BaseGeometry
+            
+            # A. Resolve the input into a GeoDataFrame
+            if isinstance(bounding_box, (str, Path)):
+                print(f"Loading spatial filter from file: {bounding_box}")
+                gdf_zone = gpd.read_file(bounding_box)
+            elif isinstance(bounding_box, gpd.GeoDataFrame):
+                print("Using provided GeoDataFrame for spatial filter.")
+                gdf_zone = bounding_box
+            elif isinstance(bounding_box, gpd.GeoSeries):
+                gdf_zone = gpd.GeoDataFrame(geometry=bounding_box)
+            elif isinstance(bounding_box, BaseGeometry):
+                # Wrap single shapely geometry (e.g. Polygon) into a GDF
+                print("Using provided Shapely Geometry for spatial filter.")
+                gdf_zone = gpd.GeoDataFrame(geometry=[bounding_box], crs="EPSG:4326")
+            else:
+                print(f"Warning: Unsupported type for bounding_box: {type(bounding_box)}. Skipping filter.")
+                gdf_zone = None
+
+            if gdf_zone is not None:
+                # B. Ensure CRS matches (EPSG:4326 for GPS)
+                if gdf_zone.crs and gdf_zone.crs.to_string() != "EPSG:4326":
+                    gdf_zone = gdf_zone.to_crs("EPSG:4326")
+                
+                # C. Merge geometries
+                target_geom = gdf_zone.geometry.unary_union
+                
+                # D. Convert points to Lines
+                tracks_gdf = points_to_lines(work, group_by='track_id')
+                
+                if not tracks_gdf.empty:
+                    # E. Intersection check
+                    mask_intersect = tracks_gdf.intersects(target_geom)
+                    valid_ids = tracks_gdf[mask_intersect]['track_id'].unique()
+                    
+                    print(f"  -> Spatial Filter: Keeping {len(valid_ids)} tracks out of {len(tracks_gdf)}.")
+                    work = work[work['track_id'].isin(valid_ids)].copy()
+                else:
+                    work = work.iloc[0:0]
+
+        except ImportError:
+            print("Error: 'geopandas' is required for spatial filtering.")
+        except Exception as e:
+            print(f"Critical error during spatial filtering: {e}")
+            return pd.DataFrame()
+
+    if work.empty:
+        return pd.DataFrame()
+
+    # ... [Keep the rest: Subsampling and Return] ...
+    # (Copy existing code for point_stride and return)
+    
     # Subsample points per track by point_stride
     if "date_time_utc" not in work.columns:
         raise KeyError("Resulting positions must contain 'date_time_utc' to be sampled by time.")
@@ -587,14 +647,6 @@ def build_light_multi_track_data(
             .apply(lambda g: g.iloc[::point_stride])
     )
 
-    #  Arctic Zone (optional, here we use your criterion) 
-    # if {"latitude", "longitude"}.issubset(work.columns):
-    #     work = work.query("latitude >= 60 and longitude >= -80 and longitude <= 40")
-
     work = work.reset_index(drop=True)
-
-    # if use_mask_dateline_jumps:
-    #     work = mask_dateline_jumps(work)
-
 
     return work
