@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 from track_builder.core.track_helpers import haversine_km, to_ts, compute_typical_speeds_by_astd_cat, \
-    calculate_improved_match_score, clean_data, get_segment_summaries, filter_attr_consistency_tolerant
+    clean_data, get_segment_summaries, filter_attr_consistency_tolerant
 from track_builder.config import (
     _LIT_CAPS_KMH,
     MatchingStrategy,
@@ -45,10 +45,10 @@ from track_builder.config import (
 
 @dataclass
 class BuildOptions:
-    max_time_gap_hours: int = 96  # temporal window (hours)
-    max_distance_km: int = 1200  # spatial window (km)
+    max_time_gap_hours: int = 25  # temporal window (hours)
+    max_distance_km: int = 400  # spatial window (km)
     min_track_length: int = 1  # min #segments to keep a track
-    matching_strategy: MatchingStrategy = "conservative"
+    matching_strategy: MatchingStrategy = "balanced"
     # scoring parameters
     w_time: float = 0.1
     w_dist: float = 0.4
@@ -213,13 +213,13 @@ def build_ship_tracks(
     
         astd_data: pd.DataFrame,
         *,
-        max_time_gap_hours: int = 96,
-        max_distance_km: int = 1200,
+        max_time_gap_hours: int = 25,
+        max_distance_km: int = 400,
         min_track_length: int = 1,
         matching_strategy: MatchingStrategy = "conservative",
-        w_time: float = 0.4,
+        w_time: float = 0.1,
         w_dist: float = 0.4,
-        w_speed: float = 0.2,
+        w_speed: float = 0.5,
         gap_days_no_penalty: float = 3.0,
         gap_penalty_per_day: float = 0.05,
         return_logs: bool = False,
