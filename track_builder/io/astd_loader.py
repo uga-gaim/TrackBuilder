@@ -6,7 +6,7 @@ from typing import Iterable, Optional, Union, List, Any, Sequence, Dict
 import pandas as pd
 import numpy as np
 
-from track_builder.core.track_helpers import remove_unrealistic_points, points_to_lines
+from track_builder.core.track_helpers import remove_unrealistic_points, points_to_lines, get_tracks_across_region
 
 from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP, ARCTIC_ZONES
 # Internal helper imports
@@ -375,8 +375,9 @@ def build_light_multi_track_data(
         random_state: Optional[int] = 42,
         preprocess_positions: bool = True,
         # use_mask_dateline_jumps: bool = True,
-        region: Optional[str] = None,  # e.g., "canada", "russia", "norway"
+        region: Optional[Union[str, Sequence[str]]] = None,  # e.g., "canada", or ["russia", "norway"]
         bounding_box: Optional[Union[str, Any]] = None,
+        minimal_region: Optional[Union[int, Sequence[str]]] = None, # e.g., 2 or ['canada', 'norway']
 ) -> pd.DataFrame:
     """
     Build a 'light' DataFrame with positions for multiple tracks,
@@ -556,30 +557,56 @@ def build_light_multi_track_data(
 
     # --- GEOGRAPHICAL FILTERING (Based on Region Name) ---
     if region:
-        key = region.lower().strip()
-        if key not in ARCTIC_ZONES:
-            print(f"Warning: Region '{region}' not found in ARCTIC_ZONES (config.py). No filter applied.")
-            print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
-        else:
-            min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[key]
+        region = [region] if isinstance(region, str) else list(region)
+        region_tracks = []
 
-            # Filter Latitude
-            mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
-
-            # Filter Longitude (Handle Date Line crossing)
-            if min_lon <= max_lon:
-                # Standard case (e.g. Canada, Norway)
-                mask_lon = (work["longitude"] >= min_lon) & (work["longitude"] <= max_lon)
+        for r in region:
+            key = r.lower().strip()
+            if key not in ARCTIC_ZONES:
+                print(f"Warning: Region '{r}' not found in ARCTIC_ZONES (config.py). No filter applied.")
+                print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
             else:
-                # Date Line Crossing (e.g. Russia: 50 -> -168)
-                # Logic: We want longitudes > 50 OR longitudes < -168
-                mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
+                min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[key]
 
-            work = work.loc[mask_lat & mask_lon].copy()
+                # Filter Latitude
+                mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
 
-            if work.empty:
-                print(f"Warning: No points found in region '{region}'")
-                return pd.DataFrame()
+                # Filter Longitude (Handle Date Line crossing)
+                if min_lon <= max_lon:
+                    # Standard case (e.g. Canada, Norway)
+                    mask_lon = (work["longitude"] >= min_lon) & (work["longitude"] <= max_lon)
+                else:
+                    # Date Line Crossing (e.g. Russia: 50 -> -168)
+                    # Logic: We want longitudes > 50 OR longitudes < -168
+                    mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
+
+                df_region = work.loc[mask_lat & mask_lon].copy()
+
+                if df_region.empty:
+                    print(f"Warning: No points found in region '{r}'")
+                    continue
+
+                df_region['region'] = r
+                region_tracks.append(df_region)
+
+
+        if not region_tracks:
+            print('Warning: No tracks found')
+            return pd.DataFrame()
+
+        # Concatenate each region's dataframe
+        work = (
+            pd.concat(region_tracks, ignore_index=True)
+            .sort_values(["track_id", "date_time_utc"])
+            .reset_index(drop=True)
+        )
+
+        # Get tracks depending on specific region conditions
+        work = get_tracks_across_region(df_tracks=work, minimal_region=minimal_region)
+
+        if work.empty:
+            print("Warning: No tracks across regions found")
+            return pd.DataFrame()
 
     # --- GEOGRAPHICAL FILTERING (Based on Shapefile/Bounding Box) ---
     if bounding_box is not None:
@@ -610,7 +637,7 @@ def build_light_multi_track_data(
                     gdf_zone = gdf_zone.to_crs("EPSG:4326")
                 
                 # C. Merge geometries
-                target_geom = gdf_zone.geometry.unary_union
+                target_geom = gdf_zone.geometry.union_all
                 
                 # D. Convert points to Lines
                 tracks_gdf = points_to_lines(work, group_by='track_id')
