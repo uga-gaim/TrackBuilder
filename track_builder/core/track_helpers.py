@@ -694,3 +694,72 @@ def points_to_lines(df: pd.DataFrame, group_by: str = 'track_id', take_first: li
     gdf = gpd.GeoDataFrame(results, crs='EPSG:4326')
     
     return gdf
+
+
+def get_tracks_across_region(df_tracks : pd.DataFrame, minimal_region = None):
+    """
+    Filter tracks based on region coverage.
+
+    Parameters
+    ----------
+    df_tracks : pandas.DataFrame
+        DataFrame containing at least the columns:
+        - 'track_id'
+        - 'region'
+    minimal_region : None, list(str), or int, optional
+        Defines the filtering rule:
+        - None: keep tracks that go through all regions present in df_tracks.
+        - list(str): keep tracks that include all regions in the provided list.
+        - int: keep tracks that go through at least this number of distinct regions.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Subset of df_tracks containing only the selected track_ids.
+
+    Raises
+    ------
+    ValueError
+        If minimal_region (list(str)) contains regions not present in df_tracks.
+    """
+
+    ids = None
+
+    if df_tracks.empty:
+        return df_tracks
+
+    region_counts = df_tracks.groupby("track_id")["region"].nunique()
+    all_regions = set(df_tracks["region"])
+
+    # Look for track that goes through all region in df_tracks
+    if minimal_region is None:
+        ids = region_counts[region_counts == len(all_regions)].index
+
+
+    # Specific regions must be included
+    elif isinstance(minimal_region, list):
+        minimal_region = [mr.lower().strip() for mr in minimal_region]
+        required = set(minimal_region)
+
+        if not required.issubset(all_regions):
+            print("Some regions in minimal_region are not present in tracks")
+            return pd.DataFrame()
+
+        ids = (
+            df_tracks.groupby("track_id")["region"]
+            .unique()
+            .loc[
+                lambda x: x.apply(
+                    lambda vals: set(minimal_region).issubset(vals)
+                    )
+            ].index
+        )
+
+    # Minimum number of regions
+    elif isinstance(minimal_region, int):
+        ids = region_counts[region_counts >= minimal_region].index
+
+    if ids is not None:
+        return df_tracks[df_tracks["track_id"].isin(ids)].copy()
+    else:
+        return pd.DataFrame()

@@ -6,7 +6,7 @@ from typing import Iterable, Optional, Union, List, Any, Sequence, Dict
 import pandas as pd
 import numpy as np
 
-from track_builder.core.track_helpers import remove_unrealistic_points, mask_dateline_jumps
+from track_builder.core.track_helpers import remove_unrealistic_points, points_to_lines, get_tracks_across_region
 
 from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP, ARCTIC_ZONES
 # Internal helper imports
@@ -375,7 +375,9 @@ def build_light_multi_track_data(
         random_state: Optional[int] = 42,
         preprocess_positions: bool = True,
         # use_mask_dateline_jumps: bool = True,
-        region: Optional[str] = None,  # e.g., "canada", "russia", "norway"
+        region: Optional[Union[str, Sequence[str]]] = None,  # e.g., "canada", or ["russia", "norway"]
+        bounding_box: Optional[Union[str, Any]] = None,
+        minimal_region: Optional[Union[int, Sequence[str]]] = None, # e.g., 2 or ['canada', 'norway']
 ) -> pd.DataFrame:
     """
     Build a 'light' DataFrame with positions for multiple tracks,
@@ -414,6 +416,10 @@ def build_light_multi_track_data(
 
     random_state : int or None
         Seed for random sampling of track_id (when track_sampling is an int).
+
+    bounding_box_file : str, optional
+        Path to a vector file (Shapefile, GeoJSON) defining a zone of interest.
+        Only tracks that intersect with this zone will be kept.
     """
 
     for col in ("track_id", "segment_id", "month"):
@@ -516,7 +522,6 @@ def build_light_multi_track_data(
         if "month" not in df_pos.columns:
             df_pos["month"] = pd.to_datetime(df_pos["date_time_utc"]).dt.strftime("%Y-%m")
 
-
     if df_pos is None:
         # Mode 1: Read from disk (BATCH MODE)
         # We pass the full list of selected_ids at once.
@@ -549,34 +554,116 @@ def build_light_multi_track_data(
 
     if work is None or work.empty:
         return pd.DataFrame()
-    
+
     # --- GEOGRAPHICAL FILTERING (Based on Region Name) ---
     if region:
-        key = region.lower().strip()
-        if key not in ARCTIC_ZONES:
-            print(f"Warning: Region '{region}' not found in ARCTIC_ZONES (config.py). No filter applied.")
-            print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
-        else:
-            min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[key]
-            
-            # Filter Latitude
-            mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
-            
-            # Filter Longitude (Handle Date Line crossing)
-            if min_lon <= max_lon:
-                # Standard case (e.g. Canada, Norway)
-                mask_lon = (work["longitude"] >= min_lon) & (work["longitude"] <= max_lon)
-            else:
-                # Date Line Crossing (e.g. Russia: 50 -> -168)
-                # Logic: We want longitudes > 50 OR longitudes < -168
-                mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
-                
-            work = work.loc[mask_lat & mask_lon].copy()
-            
-            if work.empty:
-                print(f"Warning: No points found in region '{region}'")
-                return pd.DataFrame()
+        region = [region] if isinstance(region, str) else list(region)
+        region_tracks = []
 
+        for r in region:
+            key = r.lower().strip()
+            if key not in ARCTIC_ZONES:
+                print(f"Warning: Region '{r}' not found in ARCTIC_ZONES (config.py). No filter applied.")
+                print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
+            else:
+                min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[key]
+
+                # Filter Latitude
+                mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
+
+                # Filter Longitude (Handle Date Line crossing)
+                if min_lon <= max_lon:
+                    # Standard case (e.g. Canada, Norway)
+                    mask_lon = (work["longitude"] >= min_lon) & (work["longitude"] <= max_lon)
+                else:
+                    # Date Line Crossing (e.g. Russia: 50 -> -168)
+                    # Logic: We want longitudes > 50 OR longitudes < -168
+                    mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
+
+                df_region = work.loc[mask_lat & mask_lon].copy()
+
+                if df_region.empty:
+                    print(f"Warning: No points found in region '{r}'")
+                    continue
+
+                df_region['region'] = r
+                region_tracks.append(df_region)
+
+
+        if not region_tracks:
+            print('Warning: No tracks found')
+            return pd.DataFrame()
+
+        # Concatenate each region's dataframe
+        work = (
+            pd.concat(region_tracks, ignore_index=True)
+            .sort_values(["track_id", "date_time_utc"])
+            .reset_index(drop=True)
+        )
+
+        # Get tracks depending on specific region conditions
+        work = get_tracks_across_region(df_tracks=work, minimal_region=minimal_region)
+
+        if work.empty:
+            print("Warning: No tracks across regions found")
+            return pd.DataFrame()
+
+    # --- GEOGRAPHICAL FILTERING (Based on Shapefile/Bounding Box) ---
+    if bounding_box is not None:
+        try:
+            import geopandas as gpd
+            from shapely.geometry.base import BaseGeometry
+            
+            # A. Resolve the input into a GeoDataFrame
+            if isinstance(bounding_box, (str, Path)):
+                print(f"Loading spatial filter from file: {bounding_box}")
+                gdf_zone = gpd.read_file(bounding_box)
+            elif isinstance(bounding_box, gpd.GeoDataFrame):
+                print("Using provided GeoDataFrame for spatial filter.")
+                gdf_zone = bounding_box
+            elif isinstance(bounding_box, gpd.GeoSeries):
+                gdf_zone = gpd.GeoDataFrame(geometry=bounding_box)
+            elif isinstance(bounding_box, BaseGeometry):
+                # Wrap single shapely geometry (e.g. Polygon) into a GDF
+                print("Using provided Shapely Geometry for spatial filter.")
+                gdf_zone = gpd.GeoDataFrame(geometry=[bounding_box], crs="EPSG:4326")
+            else:
+                print(f"Warning: Unsupported type for bounding_box: {type(bounding_box)}. Skipping filter.")
+                gdf_zone = None
+
+            if gdf_zone is not None:
+                # B. Ensure CRS matches (EPSG:4326 for GPS)
+                if gdf_zone.crs and gdf_zone.crs.to_string() != "EPSG:4326":
+                    gdf_zone = gdf_zone.to_crs("EPSG:4326")
+                
+                # C. Merge geometries
+                target_geom = gdf_zone.geometry.union_all
+                
+                # D. Convert points to Lines
+                tracks_gdf = points_to_lines(work, group_by='track_id')
+                
+                if not tracks_gdf.empty:
+                    # E. Intersection check
+                    mask_intersect = tracks_gdf.intersects(target_geom)
+                    valid_ids = tracks_gdf[mask_intersect]['track_id'].unique()
+                    
+                    print(f"  -> Spatial Filter: Keeping {len(valid_ids)} tracks out of {len(tracks_gdf)}.")
+                    work = work[work['track_id'].isin(valid_ids)].copy()
+                else:
+                    work = work.iloc[0:0]
+
+        except ImportError:
+            print("Error: 'geopandas' is required for spatial filtering.")
+        except Exception as e:
+            print(f"Critical error during spatial filtering: {e}")
+            return pd.DataFrame()
+
+    if work.empty:
+        return pd.DataFrame()
+
+    # ... [Keep the rest: Subsampling and Return] ...
+    # (Copy existing code for point_stride and return)
+    
     # Subsample points per track by point_stride
     if "date_time_utc" not in work.columns:
         raise KeyError("Resulting positions must contain 'date_time_utc' to be sampled by time.")
@@ -587,14 +674,6 @@ def build_light_multi_track_data(
             .apply(lambda g: g.iloc[::point_stride])
     )
 
-    #  Arctic Zone (optional, here we use your criterion) 
-    # if {"latitude", "longitude"}.issubset(work.columns):
-    #     work = work.query("latitude >= 60 and longitude >= -80 and longitude <= 40")
-
     work = work.reset_index(drop=True)
-
-    # if use_mask_dateline_jumps:
-    #     work = mask_dateline_jumps(work)
-
 
     return work

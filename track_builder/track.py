@@ -31,11 +31,11 @@ import numpy as np
 import pandas as pd
 
 from track_builder.core.track_helpers import haversine_km, to_ts, compute_typical_speeds_by_astd_cat, \
-    calculate_improved_match_score, clean_data, get_segment_summaries, filter_attr_consistency_tolerant
+    clean_data, get_segment_summaries, filter_attr_consistency_tolerant
 from track_builder.config import (
     _LIT_CAPS_KMH,
     MatchingStrategy,
-    _SCORE_THRESHOLDS,
+    # _SCORE_THRESHOLDS,
     _LIMIT_MULTIPLIERS,
     SPEED_TYPICALS_N_PER_DAY,
     SPEED_TYPICALS_CLIP_KMH,
@@ -45,14 +45,14 @@ from track_builder.config import (
 
 @dataclass
 class BuildOptions:
-    max_time_gap_hours: int = 96  # temporal window (hours)
-    max_distance_km: int = 1200  # spatial window (km)
+    max_time_gap_hours: int = 25  # temporal window (hours)
+    max_distance_km: int = 400  # spatial window (km)
     min_track_length: int = 1  # min #segments to keep a track
-    matching_strategy: MatchingStrategy = "conservative"
+    matching_strategy: MatchingStrategy = "balanced"
     # scoring parameters
-    w_time: float = 0.4
+    w_time: float = 0.1
     w_dist: float = 0.4
-    w_speed: float = 0.2
+    w_speed: float = 0.5
     gap_days_no_penalty: float = 3.0
     gap_penalty_per_day: float = 0.05
     return_logs: bool = False  # if True, return (result_df, logs_df)
@@ -177,6 +177,7 @@ def _generate_and_score_candidates(cur: pd.Series,
         _log(r, 'filter', 'speed_cap')
     c = c[~bad_speed]
 
+    # d) attribute consistency (tolerant)
     c = filter_attr_consistency_tolerant(
     c, cur,
     attrs=("flagname","iceclass","astd_cat","sizegroup_gt"),
@@ -187,9 +188,9 @@ def _generate_and_score_candidates(cur: pd.Series,
         return c
 
     # 3) Scoring (lower is better)
-    dt_norm = (c['dt_hours'] / (opts.max_time_gap_hours * max(tg_mul, 1e-9))).clip(upper=1.0)
-    dd_norm = (c['distance_km_fd'] / (opts.max_distance_km * max(dist_mul, 1e-9))).clip(upper=1.0)
-    vr = (c['implied_v_kmh'] / max(1.0, typical)).clip(upper=2.0)
+    dt_norm = (c['dt_hours'] / (opts.max_time_gap_hours * max(tg_mul, 1e-9)))
+    dd_norm = (c['distance_km_fd'] / (opts.max_distance_km * max(dist_mul, 1e-9)))
+    vr = (c['implied_v_kmh'] / max(1.0, typical))
     penalty = (c['day_gap'] - opts.gap_days_no_penalty).clip(lower=0) * opts.gap_penalty_per_day
 
     c['match_score_simple'] = opts.w_time * dt_norm + opts.w_dist * dd_norm + opts.w_speed * vr + penalty
@@ -201,7 +202,6 @@ def _generate_and_score_candidates(cur: pd.Series,
     # except Exception:
     #     c['match_score_core'] = np.nan
 
-    # 5) Strategy threshold: prefer the improved core score when available, otherwise fall back to the simple score
     return c.sort_values(['match_score_simple', 'dt_hours', 'distance_km_fd']).reset_index(drop=True)
 
 
@@ -213,13 +213,13 @@ def build_ship_tracks(
     
         astd_data: pd.DataFrame,
         *,
-        max_time_gap_hours: int = 96,
-        max_distance_km: int = 1200,
+        max_time_gap_hours: int = 25,
+        max_distance_km: int = 400,
         min_track_length: int = 1,
         matching_strategy: MatchingStrategy = "conservative",
-        w_time: float = 0.4,
+        w_time: float = 0.1,
         w_dist: float = 0.4,
-        w_speed: float = 0.2,
+        w_speed: float = 0.5,
         gap_days_no_penalty: float = 3.0,
         gap_penalty_per_day: float = 0.05,
         return_logs: bool = False,
@@ -247,7 +247,7 @@ def build_ship_tracks(
         gap_penalty_per_day=gap_penalty_per_day,
         return_logs=return_logs,
     )
-    score_threshold = _SCORE_THRESHOLDS[opts.matching_strategy]
+    # score_threshold = _SCORE_THRESHOLDS[opts.matching_strategy]
     multipliers = _LIMIT_MULTIPLIERS[opts.matching_strategy]
 
     speed_lookup = typical_speeds if typical_speeds is not None else _compute_typical_speeds_from_data(astd_data)
@@ -289,13 +289,15 @@ def build_ship_tracks(
                     break
 
                 # strategy threshold — use match_score_core if available, otherwise fall back to match_score_simple
-                if 'match_score_core' in cands and cands['match_score_core'].notna().any():
-                    cands_ok = cands[
-                        (cands['match_score_core'] <= score_threshold) | (cands['match_score_core'].isna())]
-                else:
-                    cands_ok = cands[cands['match_score_simple'] <= score_threshold]
-                if cands_ok.empty:
-                    break
+                # if 'match_score_core' in cands and cands['match_score_core'].notna().any():
+                #     cands_ok = cands[
+                #         (cands['match_score_core'] <= score_threshold) | (cands['match_score_core'].isna())]
+                # else:
+                #     cands_ok = cands[cands['match_score_simple'] <= score_threshold]
+                # if cands_ok.empty:
+                #
+
+                cands_ok = cands  # no thresholding for now
 
                 # choose best candidate not already assigned
                 # sort before choosing
