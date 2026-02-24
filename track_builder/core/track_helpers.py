@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import geopandas as gpd
+import shapely
 from shapely.geometry import LineString
 
 
@@ -666,13 +667,13 @@ def points_to_lines(df: pd.DataFrame, group_by: str = 'track_id', take_first: li
     
     for group_id, group_df in grouped:
         # Skip groups with less than 2 points (cannot make a line)
-        if len(group_df) < 2:
-            continue
+        # if len(group_df) < 2:
+        #     continue
         
         # Create LineString from coordinates
-        coords = list(zip(group_df['longitude'], group_df['latitude']))
-        line = LineString(coords)
-        
+        # coords = list(zip(group_df['longitude'], group_df['latitude']))
+        # line = LineString(coords)
+
         # Create result dictionary
         result = {group_by: group_id}
         
@@ -686,7 +687,7 @@ def points_to_lines(df: pd.DataFrame, group_by: str = 'track_id', take_first: li
         result['end'] = group_df['date_time_utc'].iloc[-1]
         
         # Add geometry
-        result['geometry'] = line
+        result['geometry'] = shapely.MultiPoint(list(zip(group_df['longitude'], group_df['latitude'])))
         
         results.append(result)
     
@@ -696,7 +697,7 @@ def points_to_lines(df: pd.DataFrame, group_by: str = 'track_id', take_first: li
     return gdf
 
 
-def get_tracks_across_region(df_tracks : pd.DataFrame, minimal_region = None):
+def get_tracks_across_region(df_tracks : pd.DataFrame, minimal_region = "all"):
     """
     Filter tracks based on region coverage.
 
@@ -706,9 +707,9 @@ def get_tracks_across_region(df_tracks : pd.DataFrame, minimal_region = None):
         DataFrame containing at least the columns:
         - 'track_id'
         - 'region'
-    minimal_region : None, list(str), or int, optional
+    minimal_region : "all", list(str), or int, optional
         Defines the filtering rule:
-        - None: keep tracks that go through all regions present in df_tracks.
+        - "all": keep tracks that go through all regions present in df_tracks.
         - list(str): keep tracks that include all regions in the provided list.
         - int: keep tracks that go through at least this number of distinct regions.
 
@@ -729,16 +730,20 @@ def get_tracks_across_region(df_tracks : pd.DataFrame, minimal_region = None):
         return df_tracks
 
     region_counts = df_tracks.groupby("track_id")["region"].nunique()
-    all_regions = set(df_tracks["region"])
+    all_regions = set(df_tracks["region"].astype(str))
+
+    # Convert in case just one region is given as a string
+    if isinstance(minimal_region, str) and minimal_region != "all":
+        minimal_region = [minimal_region]
 
     # Look for track that goes through all region in df_tracks
-    if minimal_region is None:
+    if minimal_region == "all":
         ids = region_counts[region_counts == len(all_regions)].index
-
 
     # Specific regions must be included
     elif isinstance(minimal_region, list):
-        minimal_region = [mr.lower().strip() for mr in minimal_region]
+        # Get each region in minimal_region as a clean string (convert int to string for comparison, remove trailing space and lower text)
+        minimal_region = [str(mr).lower().strip() for mr in minimal_region]
         required = set(minimal_region)
 
         if not required.issubset(all_regions):

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Union, List, Any, Sequence, Dict
 import pandas as pd
 import numpy as np
+import shapely
 
 from track_builder.core.track_helpers import remove_unrealistic_points, points_to_lines, get_tracks_across_region
 
@@ -371,13 +372,15 @@ def build_light_multi_track_data(
         base_path: Optional[Pathish] = None,
         chunksize: int = 50_000,
         progress: bool = True,
-        point_stride: int = 10,
+        point_stride: int = 10, # TODO: Correct compatibility with region filter
+        # The default value of 10 may remove data points from a track after applying the region and minimum region filters. This can result in a returned DataFrame that no longer contains data points from a specific region, effectively breaking the filter logic.
+        # If all points from a required region are removed during filtering, the track may still be returned as matching the filter criteria. However, when iterating over the resulting DataFrame, the track will not actually contain the region it is expected to pass through, leading to inconsistent or incorrect behavior.
         random_state: Optional[int] = 42,
         preprocess_positions: bool = True,
         # use_mask_dateline_jumps: bool = True,
         region: Optional[Union[str, Sequence[str]]] = None,  # e.g., "canada", or ["russia", "norway"]
         bounding_box: Optional[Union[str, Any]] = None,
-        minimal_region: Optional[Union[int, Sequence[str]]] = None, # e.g., 2 or ['canada', 'norway']
+        minimal_region: Optional[Union[int, Sequence[Union[str, int]]]] = None, # e.g., 2 (minimum number of regions) or ['canada', 'norway'] or ['canada', 1] (for bounding_box)
 ) -> pd.DataFrame:
     """
     Build a 'light' DataFrame with positions for multiple tracks,
@@ -417,9 +420,21 @@ def build_light_multi_track_data(
     random_state : int or None
         Seed for random sampling of track_id (when track_sampling is an int).
 
-    bounding_box_file : str, optional
-        Path to a vector file (Shapefile, GeoJSON) defining a zone of interest.
-        Only tracks that intersect with this zone will be kept.
+    region : str or list(str), optional
+        Identifier name(s) selecting region(s) of interest, defined in config (ARCTIC_ZONES).
+        Tracks that intersect with given region(s) will be kept.
+
+    bounding_box : str or list(str) or Shapefile, optional
+        Path to a vector file or a Shapefile/GeoJSON, defining zone(s) of interest.
+        Tracks that intersect with given zone(s) will be kept.
+
+    minimal_region : str or int, or list(int or str), optional
+        Region name or zone identifier defining minimum 'region' or 'bounding_box' of interest.
+        Tracks that intersect with **at least** given region or zone will be kept.
+            - 'all' -> return tracks going through all region or zone of interest
+            - 2 -> return tracks going through at least two region or zone of interest
+            - '1' -> return tracks going through at least given bounding_box n°1
+            - ['Canada', 'Norway', '3'] -> return tracks going through at least 'Canada', 'Norway' and given bounding_box n°3
     """
 
     for col in ("track_id", "segment_id", "month"):
@@ -556,9 +571,10 @@ def build_light_multi_track_data(
         return pd.DataFrame()
 
     # --- GEOGRAPHICAL FILTERING (Based on Region Name) ---
+    region_tracks = []
+
     if region:
         region = [region] if isinstance(region, str) else list(region)
-        region_tracks = []
 
         for r in region:
             key = r.lower().strip()
@@ -589,74 +605,93 @@ def build_light_multi_track_data(
                 df_region['region'] = r
                 region_tracks.append(df_region)
 
-
-        if not region_tracks:
-            print('Warning: No tracks found')
-            return pd.DataFrame()
-
-        # Concatenate each region's dataframe
-        work = (
-            pd.concat(region_tracks, ignore_index=True)
-            .sort_values(["track_id", "date_time_utc"])
-            .reset_index(drop=True)
-        )
-
-        # Get tracks depending on specific region conditions
-        work = get_tracks_across_region(df_tracks=work, minimal_region=minimal_region)
-
-        if work.empty:
-            print("Warning: No tracks across regions found")
-            return pd.DataFrame()
-
     # --- GEOGRAPHICAL FILTERING (Based on Shapefile/Bounding Box) ---
     if bounding_box is not None:
         try:
             import geopandas as gpd
             from shapely.geometry.base import BaseGeometry
-            
-            # A. Resolve the input into a GeoDataFrame
-            if isinstance(bounding_box, (str, Path)):
-                print(f"Loading spatial filter from file: {bounding_box}")
-                gdf_zone = gpd.read_file(bounding_box)
-            elif isinstance(bounding_box, gpd.GeoDataFrame):
-                print("Using provided GeoDataFrame for spatial filter.")
-                gdf_zone = bounding_box
-            elif isinstance(bounding_box, gpd.GeoSeries):
-                gdf_zone = gpd.GeoDataFrame(geometry=bounding_box)
-            elif isinstance(bounding_box, BaseGeometry):
-                # Wrap single shapely geometry (e.g. Polygon) into a GDF
-                print("Using provided Shapely Geometry for spatial filter.")
-                gdf_zone = gpd.GeoDataFrame(geometry=[bounding_box], crs="EPSG:4326")
-            else:
-                print(f"Warning: Unsupported type for bounding_box: {type(bounding_box)}. Skipping filter.")
-                gdf_zone = None
 
-            if gdf_zone is not None:
-                # B. Ensure CRS matches (EPSG:4326 for GPS)
-                if gdf_zone.crs and gdf_zone.crs.to_string() != "EPSG:4326":
-                    gdf_zone = gdf_zone.to_crs("EPSG:4326")
-                
-                # C. Merge geometries
-                target_geom = gdf_zone.geometry.union_all
-                
-                # D. Convert points to Lines
-                tracks_gdf = points_to_lines(work, group_by='track_id')
-                
-                if not tracks_gdf.empty:
-                    # E. Intersection check
-                    mask_intersect = tracks_gdf.intersects(target_geom)
-                    valid_ids = tracks_gdf[mask_intersect]['track_id'].unique()
-                    
-                    print(f"  -> Spatial Filter: Keeping {len(valid_ids)} tracks out of {len(tracks_gdf)}.")
-                    work = work[work['track_id'].isin(valid_ids)].copy()
+            bounding_box = [bounding_box] if isinstance(bounding_box, (str, Path, gpd.GeoDataFrame, gpd.GeoSeries, BaseGeometry)) else list(bounding_box)
+
+            for i, b in enumerate(bounding_box):
+                # A. Resolve the input into a GeoDataFrame
+                if isinstance(b, (str, Path)):
+                    print(f"Loading spatial filter from file: {b}")
+                    gdf_zone = gpd.read_file(b)
+                elif isinstance(b, gpd.GeoDataFrame):
+                    print("Using provided GeoDataFrame for spatial filter.")
+                    gdf_zone = b
+                elif isinstance(b, gpd.GeoSeries):
+                    gdf_zone = gpd.GeoDataFrame(geometry=b)
+                elif isinstance(b, BaseGeometry):
+                    # Wrap single shapely geometry (e.g. Polygon) into a GDF
+                    print("Using provided Shapely Geometry for spatial filter.")
+                    gdf_zone = gpd.GeoDataFrame(geometry=[b], crs="EPSG:4326")
                 else:
-                    work = work.iloc[0:0]
+                    print(f"Warning: Unsupported type for bounding_box: {type(b)}. Skipping filter.")
+                    gdf_zone = None
+
+                if gdf_zone is not None:
+                    # B. Ensure CRS matches (EPSG:4326 for GPS)
+                    if gdf_zone.crs and gdf_zone.crs.to_string() != "EPSG:4326":
+                        gdf_zone = gdf_zone.to_crs("EPSG:4326")
+
+                    # C. Merge geometries
+                    target_geom = gdf_zone.union_all()
+
+                    # D. Convert points to Lines
+                    # tracks_gdf = points_to_lines(work, group_by='track_id')
+
+                    tracks_gdf = gpd.GeoDataFrame(
+                        work.copy(),
+                        geometry=gpd.points_from_xy(work['longitude'], work['latitude']),
+                        crs='EPSG:4326'
+                    )
+
+                    if not tracks_gdf.empty:
+                        # E. Intersection check
+                        # mask_intersect = tracks_gdf.intersects(target_geom)
+                        # valid_ids = tracks_gdf[mask_intersect]['track_id'].unique()
+
+                        # 2. Keep only points inside the target geometry
+                        df_boxes = tracks_gdf[tracks_gdf['geometry'].within(target_geom)].copy()
+                        df_boxes.drop('geometry', axis=1, inplace=True)
+
+                        # print(f"  -> Spatial Filter (box '{i}'): Keeping {len(df_boxes)} tracks out of {len(tracks_gdf)}.")
+                        # df_boxes = work.iloc[valid_ids].copy()
+                    else:
+                        df_boxes = work.iloc[0:0]
+
+                    if df_boxes.empty:
+                        print(f"Warning: No points found in box '{i}'")
+                        continue
+
+                    df_boxes['region'] = str(i)
+                    region_tracks.append(df_boxes)
 
         except ImportError:
             print("Error: 'geopandas' is required for spatial filtering.")
         except Exception as e:
             print(f"Critical error during spatial filtering: {e}")
             return pd.DataFrame()
+
+    # Build DataFrame of selected zone and regions
+    if not region_tracks:
+        print('Warning: No tracks found')
+        return pd.DataFrame()
+    else:
+
+        # Concatenate each region's and zone's dataframe
+        work = (
+            pd.concat(region_tracks, ignore_index=True)
+            .sort_values(["track_id", "date_time_utc"])
+            .reset_index(drop=True)
+        )
+
+
+        if minimal_region is not None:
+            # Get tracks depending on specific region conditions (if none get all)
+            work = get_tracks_across_region(df_tracks=work, minimal_region=minimal_region)
 
     if work.empty:
         return pd.DataFrame()
