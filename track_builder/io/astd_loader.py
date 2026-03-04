@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import shapely
 
-from track_builder.core.track_helpers import remove_unrealistic_points, points_to_lines, get_tracks_across_region
+from track_builder.core.track_helpers import remove_unrealistic_points, to_box, get_tracks_across_region
 
 from track_builder.config import ASTD_USEFUL_COLS, ASTD_DTYPE_MAP, ARCTIC_ZONES
 # Internal helper imports
@@ -376,6 +376,7 @@ def build_light_multi_track_data(
         random_state: Optional[int] = 42,
         preprocess_positions: bool = True,
         # use_mask_dateline_jumps: bool = True,
+        remove_overlapping: bool = False,
         region: Optional[Union[str, Sequence[Union[str, Any]]]] = None,  # e.g., "canada", or ["russia", "norway"]
         minimal_region: Optional[Union[int, Sequence[Union[str, int]]]] = None, # e.g., 2 (minimum number of regions) or ['canada', 'norway'] or ['canada', 1] (for bounding_box)
 ) -> pd.DataFrame:
@@ -431,6 +432,9 @@ def build_light_multi_track_data(
             - 2 -> return tracks going through at least two region or zone of interest
             - '1' -> return tracks going through at least given region geometry n°1
             - ['Canada', 'Norway', '3'] -> return tracks going through at least 'Canada', 'Norway' and given region geometry n°3
+    remove_overlapping : bool, optional
+        If True, checks whether selected regions or geometries overlap.
+        If an overlap is found, the later geometry is removed, giving priority to regions selected earlier in 'region' (ascending order).
     """
 
     for col in ("track_id", "segment_id", "month"):
@@ -571,82 +575,76 @@ def build_light_multi_track_data(
 
     # Check if shapefile or coordinates are given raw
     region_geometry = []
-    region_keys = []
 
     if region:
         print("Warning: point_stride is set to 1 when region filtering is selected.")
         point_stride = 1
         region = [region] if not isinstance(region, list) else region
 
+        geometry_index = 0
+
         # Check if given region is a key or a geometry shape
         for item in region:
             if isinstance(item, str):
                 key = item.lower().strip()
                 path_file = Path(item)
+
                 if key in ARCTIC_ZONES:
-                    region_keys.append(key)
+                    key_coordinates = ARCTIC_ZONES[key]
+                    region_geometry.append(
+                        {key: to_box(key_coordinates)}
+                        )
+                    continue
 
                 elif path_file.exists():
-                    region_geometry.append(path_file)
+                    region_geometry.append(
+                        {geometry_index: path_file}
+                        )
+                    geometry_index += 1
+                    continue
 
-                else:
-                    print(f"Warning: '{item}' must be a key or a file path")
-                    print(f"Path '{item}' not found")
-                    print(f"Region '{item}' not found in ARCTIC_ZONES (config.py)")
-                    print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
-
-            else: # isinstance(region_geometry, (gpd.GeoDataFrame, gpd.GeoSeries, BaseGeometry))
-                region_geometry.append(item)
-
-    if region_keys:
-        print(f"Processing {len(region_keys)} region as key to arctic zones")
-        for r in region_keys:
-            min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[r]
-
-            # Filter Latitude
-            mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
-
-            # Filter Longitude (Handle Date Line crossing)
-            if min_lon <= max_lon:
-                # Standard case (e.g. Canada, Norway)
-                mask_lon = (work["longitude"] >= min_lon) & (work["longitude"] <= max_lon)
-            else:
-                # Date Line Crossing (e.g. Russia: 50 -> -168)
-                # Logic: We want longitudes > 50 OR longitudes < -168
-                mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
-
-            df_region = work.loc[mask_lat & mask_lon].copy()
-
-            if df_region.empty:
-                print(f"Warning: No points found in region '{r}'")
+                print(f"Warning: '{item}' is neither a valid region key nor an existing file path.")
+                print(f"Available regions: {list(ARCTIC_ZONES)}")
                 continue
 
-            df_region['region'] = r
-            region_tracks.append(df_region)
+            region_geometry.append(
+                {geometry_index: item}
+                )
+            geometry_index += 1
 
-    # --- GEOGRAPHICAL FILTERING (Based on Shapefile/Bounding Box) ---
+    # --- GEOGRAPHICAL FILTERING ---
     if region_geometry is not None:
-        print(f"Processing {len(region_geometry)} region as geometry")
         try:
             import geopandas as gpd
             from shapely.geometry.base import BaseGeometry
 
-            for i, b in enumerate(region_geometry):
+            # Convert coordinates to points
+            tracks_gdf = gpd.GeoDataFrame(
+                    work.copy(),
+                    geometry=gpd.points_from_xy(work['longitude'], work['latitude']),
+                    crs='EPSG:4326'
+                )
+
+            previous_geometries = []
+
+            for geometry in region_geometry:
+                key, value = next(iter(geometry.items()))
+
                 # A. Resolve the input into a GeoDataFrame
-                if isinstance(b, Path):
-                    print(f"Loading spatial filter from file: {b}")
-                    gdf_zone = gpd.read_file(b)
-                elif isinstance(b, gpd.GeoDataFrame):
+                if isinstance(value, Path):
+                    print(f"Loading spatial filter from file: {value}")
+                    gdf_zone = gpd.read_file(value)
+                elif isinstance(value, gpd.GeoDataFrame):
                     print("Using provided GeoDataFrame for spatial filter.")
-                    gdf_zone = b
-                elif isinstance(b, gpd.GeoSeries):
-                    gdf_zone = gpd.GeoDataFrame(geometry=b)
-                elif isinstance(b, BaseGeometry):
+                    gdf_zone = value
+                elif isinstance(value, gpd.GeoSeries):
+                    gdf_zone = gpd.GeoDataFrame(geometry=value)
+                elif isinstance(value, BaseGeometry):
                     # Wrap single shapely geometry (e.g. Polygon) into a GDF
                     print("Using provided Shapely Geometry for spatial filter.")
-                    gdf_zone = gpd.GeoDataFrame(geometry=[b], crs="EPSG:4326")
+                    gdf_zone = gpd.GeoDataFrame(geometry=[value], crs="EPSG:4326")
                 else:
-                    print(f"Warning: Unsupported type for bounding_box: {type(b)}. Skipping filter.")
+                    print(f"Warning: Unsupported type for bounding_box: {type(value)}. Skipping filter.")
                     gdf_zone = None
 
                 if gdf_zone is not None:
@@ -655,37 +653,35 @@ def build_light_multi_track_data(
                         gdf_zone = gdf_zone.to_crs("EPSG:4326")
 
                     # C. Merge geometries
-                    target_geom = gdf_zone.union_all()
+                    target_geometry = gdf_zone.union_all()
 
-                    # D. Convert points to Lines
-                    # tracks_gdf = points_to_lines(work, group_by='track_id')
+                    # Check if geometry overlap with another previous geometry
+                    if remove_overlapping:
+                        overlap_key = False
+                        for (prev_key, prev_geometry) in previous_geometries:
+                            if target_geometry.overlaps(prev_geometry):
+                                print(f"Geometry key '{key}' overlaps with geometry key '{prev_key}'. Skipping region.")
+                                overlap_key = True
+                                continue
 
-                    tracks_gdf = gpd.GeoDataFrame(
-                        work.copy(),
-                        geometry=gpd.points_from_xy(work['longitude'], work['latitude']),
-                        crs='EPSG:4326'
-                    )
+                        if overlap_key:
+                            # Skip current region if overlapping
+                            continue
 
-                    if not tracks_gdf.empty:
-                        # E. Intersection check
-                        # mask_intersect = tracks_gdf.intersects(target_geom)
-                        # valid_ids = tracks_gdf[mask_intersect]['track_id'].unique()
+                    previous_geometries.append((key, target_geometry))
 
-                        # 2. Keep only points inside the target geometry
-                        df_boxes = tracks_gdf[tracks_gdf['geometry'].within(target_geom)].copy()
-                        df_boxes.drop('geometry', axis=1, inplace=True)
+                    # D. Keep only points inside the target geometry
+                    df_within = tracks_gdf[tracks_gdf['geometry'].within(target_geometry)].copy()
+                    df_within.drop('geometry', axis=1, inplace=True)
 
-                        # print(f"  -> Spatial Filter (box '{i}'): Keeping {len(df_boxes)} tracks out of {len(tracks_gdf)}.")
-                        # df_boxes = work.iloc[valid_ids].copy()
-                    else:
-                        df_boxes = work.iloc[0:0]
-
-                    if df_boxes.empty:
-                        print(f"Warning: No points found in box '{i}'")
+                    if df_within.empty:
+                        print(f"Warning: No points found in region with key '{key}'")
                         continue
 
-                    df_boxes['region'] = str(i)
-                    region_tracks.append(df_boxes)
+                    print(f"  -> Spatial Filter (key '{key}'): Keeping {df_within['track_id'].nunique()} tracks.")
+
+                    df_within['region'] = str(key)
+                    region_tracks.append(df_within)
 
         except ImportError:
             print("Error: 'geopandas' is required for spatial filtering.")
@@ -697,15 +693,14 @@ def build_light_multi_track_data(
     if not region_tracks:
         print('Warning: No tracks found')
         return pd.DataFrame()
-    else:
 
+    else:
         # Concatenate each region's and zone's dataframe
         work = (
             pd.concat(region_tracks, ignore_index=True)
             .sort_values(["track_id", "date_time_utc"])
             .reset_index(drop=True)
         )
-
 
         if minimal_region is not None:
             # Get tracks depending on specific region conditions (if none get all)

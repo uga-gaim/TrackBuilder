@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import shapely
-from shapely.geometry import LineString
+from shapely.geometry import LineString, box
 
 
 from track_builder.config import _LIT_CAPS_KMH
@@ -667,12 +667,12 @@ def points_to_lines(df: pd.DataFrame, group_by: str = 'track_id', take_first: li
     
     for group_id, group_df in grouped:
         # Skip groups with less than 2 points (cannot make a line)
-        # if len(group_df) < 2:
-        #     continue
-        
+        if len(group_df) < 2:
+            continue
+
         # Create LineString from coordinates
-        # coords = list(zip(group_df['longitude'], group_df['latitude']))
-        # line = LineString(coords)
+        coords = list(zip(group_df['longitude'], group_df['latitude']))
+        line = LineString(coords)
 
         # Create result dictionary
         result = {group_by: group_id}
@@ -687,7 +687,7 @@ def points_to_lines(df: pd.DataFrame, group_by: str = 'track_id', take_first: li
         result['end'] = group_df['date_time_utc'].iloc[-1]
         
         # Add geometry
-        result['geometry'] = shapely.MultiPoint(list(zip(group_df['longitude'], group_df['latitude'])))
+        result['geometry'] = line
         
         results.append(result)
     
@@ -768,3 +768,22 @@ def get_tracks_across_region(df_tracks : pd.DataFrame, minimal_region = "all"):
         return df_tracks[df_tracks["track_id"].isin(ids)].copy()
     else:
         return pd.DataFrame()
+
+
+def to_box(coordinates : tuple, crs="EPSG:4326"):
+    # Convert coordinates in box (handles date line crossing)
+    min_lon, max_lon, min_lat, max_lat = coordinates
+
+    # Filter Longitude (Handle Date Line crossing)
+    if min_lon <= max_lon:
+        # Standard case (e.g. Canada, Norway)
+        geom = box(min_lon, min_lat, max_lon, max_lat)
+        return gpd.GeoDataFrame(geometry=[geom], crs=crs)
+    else:
+        # Date Line Crossing (e.g. Russia: 50 -> -168)
+        # Logic: We want longitudes > 50 OR longitudes < -168
+        geom1 = box(min_lon, min_lat, 180, max_lat)
+        geom2 = box(-180, min_lat, max_lon, max_lat)
+
+        merged = shapely.unary_union([geom1, geom2])
+        return gpd.GeoDataFrame(geometry=[merged], crs=crs)
