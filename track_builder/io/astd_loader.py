@@ -372,14 +372,11 @@ def build_light_multi_track_data(
         base_path: Optional[Pathish] = None,
         chunksize: int = 50_000,
         progress: bool = True,
-        point_stride: int = 10, # TODO: Correct compatibility with region filter
-        # The default value of 10 may remove data points from a track after applying the region and minimum region filters. This can result in a returned DataFrame that no longer contains data points from a specific region, effectively breaking the filter logic.
-        # If all points from a required region are removed during filtering, the track may still be returned as matching the filter criteria. However, when iterating over the resulting DataFrame, the track will not actually contain the region it is expected to pass through, leading to inconsistent or incorrect behavior.
+        point_stride: int = 10,
         random_state: Optional[int] = 42,
         preprocess_positions: bool = True,
         # use_mask_dateline_jumps: bool = True,
-        region: Optional[Union[str, Sequence[str]]] = None,  # e.g., "canada", or ["russia", "norway"]
-        bounding_box: Optional[Union[str, Any]] = None,
+        region: Optional[Union[str, Sequence[Union[str, Any]]]] = None,  # e.g., "canada", or ["russia", "norway"]
         minimal_region: Optional[Union[int, Sequence[Union[str, int]]]] = None, # e.g., 2 (minimum number of regions) or ['canada', 'norway'] or ['canada', 1] (for bounding_box)
 ) -> pd.DataFrame:
     """
@@ -420,21 +417,20 @@ def build_light_multi_track_data(
     random_state : int or None
         Seed for random sampling of track_id (when track_sampling is an int).
 
-    region : str or list(str), optional
+    region : str or list(str or Any), optional
         Identifier name(s) selecting region(s) of interest, defined in config (ARCTIC_ZONES).
         Tracks that intersect with given region(s) will be kept.
-
-    bounding_box : str or list(str) or Shapefile, optional
+        OR
         Path to a vector file or a Shapefile/GeoJSON, defining zone(s) of interest.
         Tracks that intersect with given zone(s) will be kept.
 
     minimal_region : str or int, or list(int or str), optional
-        Region name or zone identifier defining minimum 'region' or 'bounding_box' of interest.
+        Region name or zone identifier defining minimum 'region' of interest.
         Tracks that intersect with **at least** given region or zone will be kept.
             - 'all' -> return tracks going through all region or zone of interest
             - 2 -> return tracks going through at least two region or zone of interest
-            - '1' -> return tracks going through at least given bounding_box n°1
-            - ['Canada', 'Norway', '3'] -> return tracks going through at least 'Canada', 'Norway' and given bounding_box n°3
+            - '1' -> return tracks going through at least given region geometry n°1
+            - ['Canada', 'Norway', '3'] -> return tracks going through at least 'Canada', 'Norway' and given region geometry n°3
     """
 
     for col in ("track_id", "segment_id", "month"):
@@ -573,49 +569,71 @@ def build_light_multi_track_data(
     # --- GEOGRAPHICAL FILTERING (Based on Region Name) ---
     region_tracks = []
 
+    # Check if shapefile or coordinates are given raw
+    region_geometry = []
+    region_keys = []
+
     if region:
-        region = [region] if isinstance(region, str) else list(region)
+        print("Warning: point_stride is set to 1 when region filtering is selected.")
+        point_stride = 1
+        region = [region] if not isinstance(region, list) else region
 
-        for r in region:
-            key = r.lower().strip()
-            if key not in ARCTIC_ZONES:
-                print(f"Warning: Region '{r}' not found in ARCTIC_ZONES (config.py). No filter applied.")
-                print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
-            else:
-                min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[key]
+        # Check if given region is a key or a geometry shape
+        for item in region:
+            if isinstance(item, str):
+                key = item.lower().strip()
+                path_file = Path(item)
+                if key in ARCTIC_ZONES:
+                    region_keys.append(key)
 
-                # Filter Latitude
-                mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
+                elif path_file.exists():
+                    region_geometry.append(path_file)
 
-                # Filter Longitude (Handle Date Line crossing)
-                if min_lon <= max_lon:
-                    # Standard case (e.g. Canada, Norway)
-                    mask_lon = (work["longitude"] >= min_lon) & (work["longitude"] <= max_lon)
                 else:
-                    # Date Line Crossing (e.g. Russia: 50 -> -168)
-                    # Logic: We want longitudes > 50 OR longitudes < -168
-                    mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
+                    print(f"Warning: '{item}' must be a key or a file path")
+                    print(f"Path '{item}' not found")
+                    print(f"Region '{item}' not found in ARCTIC_ZONES (config.py)")
+                    print(f"Available regions: {list(ARCTIC_ZONES.keys())}")
 
-                df_region = work.loc[mask_lat & mask_lon].copy()
+            else: # isinstance(region_geometry, (gpd.GeoDataFrame, gpd.GeoSeries, BaseGeometry))
+                region_geometry.append(item)
 
-                if df_region.empty:
-                    print(f"Warning: No points found in region '{r}'")
-                    continue
+    if region_keys:
+        print(f"Processing {len(region_keys)} region as key to arctic zones")
+        for r in region_keys:
+            min_lon, max_lon, min_lat, max_lat = ARCTIC_ZONES[r]
 
-                df_region['region'] = r
-                region_tracks.append(df_region)
+            # Filter Latitude
+            mask_lat = (work["latitude"] >= min_lat) & (work["latitude"] <= max_lat)
+
+            # Filter Longitude (Handle Date Line crossing)
+            if min_lon <= max_lon:
+                # Standard case (e.g. Canada, Norway)
+                mask_lon = (work["longitude"] >= min_lon) & (work["longitude"] <= max_lon)
+            else:
+                # Date Line Crossing (e.g. Russia: 50 -> -168)
+                # Logic: We want longitudes > 50 OR longitudes < -168
+                mask_lon = (work["longitude"] >= min_lon) | (work["longitude"] <= max_lon)
+
+            df_region = work.loc[mask_lat & mask_lon].copy()
+
+            if df_region.empty:
+                print(f"Warning: No points found in region '{r}'")
+                continue
+
+            df_region['region'] = r
+            region_tracks.append(df_region)
 
     # --- GEOGRAPHICAL FILTERING (Based on Shapefile/Bounding Box) ---
-    if bounding_box is not None:
+    if region_geometry is not None:
+        print(f"Processing {len(region_geometry)} region as geometry")
         try:
             import geopandas as gpd
             from shapely.geometry.base import BaseGeometry
 
-            bounding_box = [bounding_box] if isinstance(bounding_box, (str, Path, gpd.GeoDataFrame, gpd.GeoSeries, BaseGeometry)) else list(bounding_box)
-
-            for i, b in enumerate(bounding_box):
+            for i, b in enumerate(region_geometry):
                 # A. Resolve the input into a GeoDataFrame
-                if isinstance(b, (str, Path)):
+                if isinstance(b, Path):
                     print(f"Loading spatial filter from file: {b}")
                     gdf_zone = gpd.read_file(b)
                 elif isinstance(b, gpd.GeoDataFrame):
