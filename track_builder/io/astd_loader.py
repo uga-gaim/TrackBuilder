@@ -577,8 +577,11 @@ def build_light_multi_track_data(
     region_geometry = []
 
     if region:
-        print("Warning: point_stride is set to 1 when region filtering is selected.")
-        point_stride = 1
+        # Check if point stride is different from 1
+        if point_stride != 1:
+            print("Warning: point_stride is set to 1 when region filtering is selected.")
+            point_stride = 1
+
         region = [region] if not isinstance(region, list) else region
 
         geometry_index = 0
@@ -656,17 +659,18 @@ def build_light_multi_track_data(
                     target_geometry = gdf_zone.union_all()
 
                     # Check if geometry overlap with another previous geometry
-                    if remove_overlapping:
-                        overlap_key = False
-                        for (prev_key, prev_geometry) in previous_geometries:
-                            if target_geometry.overlaps(prev_geometry):
-                                print(f"Geometry key '{key}' overlaps with geometry key '{prev_key}'. Skipping region.")
+                    overlap_key = False
+                    for (prev_key, prev_geometry) in previous_geometries:
+                        if target_geometry.overlaps(prev_geometry):
+                            print(f"Warning: Geometry key '{key}' overlaps with geometry key '{prev_key}'.")
+                            if remove_overlapping:
                                 overlap_key = True
                                 continue
 
-                        if overlap_key:
-                            # Skip current region if overlapping
-                            continue
+                    # Skip current region if overlapping
+                    if overlap_key:
+                        print(f"Warning: Skipping region with key '{key}'.")
+                        continue
 
                     previous_geometries.append((key, target_geometry))
 
