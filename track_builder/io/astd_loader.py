@@ -616,7 +616,7 @@ def build_light_multi_track_data(
             geometry_index += 1
 
     # --- GEOGRAPHICAL FILTERING ---
-    if region_geometry is not None:
+    if region_geometry:
         try:
             import geopandas as gpd
             from shapely.geometry.base import BaseGeometry
@@ -693,22 +693,22 @@ def build_light_multi_track_data(
             print(f"Critical error during spatial filtering: {e}")
             return pd.DataFrame()
 
-    # Build DataFrame of selected zone and regions
-    if not region_tracks:
-        print('Warning: No tracks found')
-        return pd.DataFrame()
+        # Build DataFrame of selected zone and regions
+        if not region_tracks:
+            print('Warning: No tracks found')
+            return pd.DataFrame()
 
-    else:
-        # Concatenate each region's and zone's dataframe
-        work = (
-            pd.concat(region_tracks, ignore_index=True)
-            .sort_values(["track_id", "date_time_utc"])
-            .reset_index(drop=True)
-        )
+        else:
+            # Concatenate each region's and zone's dataframe
+            work = (
+                pd.concat(region_tracks, ignore_index=True)
+                .sort_values(["track_id", "date_time_utc"])
+                .reset_index(drop=True)
+            )
 
-        if minimal_region is not None:
-            # Get tracks depending on specific region conditions (if none get all)
-            work = get_tracks_across_region(df_tracks=work, minimal_region=minimal_region)
+            if minimal_region is not None:
+                # Get tracks depending on specific region conditions (if none get all)
+                work = get_tracks_across_region(df_tracks=work, minimal_region=minimal_region)
 
     if work.empty:
         return pd.DataFrame()

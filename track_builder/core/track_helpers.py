@@ -322,7 +322,7 @@ def _compute_speed_kmh_between_rows(grp: pd.DataFrame) -> pd.Series:
     return pd.Series(speeds, index=grp.index[1:])
 
 
-def compute_typical_speeds_by_astd_cat(
+def  compute_typical_speeds_by_astd_cat(
         df: pd.DataFrame,
         *,
         n_per_day: int = 4,
@@ -385,6 +385,13 @@ def compute_typical_speeds_by_astd_cat(
                 n_ships_used=('shipid', 'nunique'))
            .reset_index()
            .sort_values('typical_speed_kmh'))
+
+    #  Filter to take computed speed if minimal number of ships is matched
+    mask_filter = out['n_ships_used'] < 50
+
+    out.loc[mask_filter, 'typical_speed_kmh'] = np.nan
+    out.loc[mask_filter, 'n_ships_used'] = 0
+
     return out
 
 
