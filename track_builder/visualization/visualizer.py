@@ -117,7 +117,7 @@ def plot_ship_tracks(
 
             # 1. THE LINE
             cdata, suffix, _ = build_hover_customdata(grp, extra_cols_priority, color_by=color_by)
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 lat=grp[lat], lon=grp[lon],
                 mode="lines",
                 name=f"Track {track_id}",
@@ -132,14 +132,14 @@ def plot_ship_tracks(
                 # --- START: RING (Simulated) ---
                 
                 # 1. Colored background (Outer border)
-                fig.add_trace(go.Scattermapbox(
+                fig.add_trace(go.Scattermap(
                     lat=grp[lat].iloc[[0]], lon=grp[lon].iloc[[0]],
                     mode="markers",
                     marker={"size": 14, "color": track_color, "opacity": 1.0},
                     showlegend=False, hoverinfo="skip"
                 ))
                 # 2. White hole (Inner) -> Creates the "Ring" effect
-                fig.add_trace(go.Scattermapbox(
+                fig.add_trace(go.Scattermap(
                     lat=grp[lat].iloc[[0]], lon=grp[lon].iloc[[0]],
                     mode="markers",
                     marker={"size": 8, "color": "white", "opacity": 1.0},
@@ -152,14 +152,14 @@ def plot_ship_tracks(
                 # --- END: SOLID CIRCLE (Simulated) ---
                 
                 # 1. White background (Halo/Border)
-                fig.add_trace(go.Scattermapbox(
+                fig.add_trace(go.Scattermap(
                     lat=grp[lat].iloc[[-1]], lon=grp[lon].iloc[[-1]],
                     mode="markers",
                     marker={"size": 16, "color": "white", "opacity": 0.8},
                     showlegend=False, hoverinfo="skip"
                 ))
                 # 2. Colored point (Inner) -> Creates the "Solid" effect
-                fig.add_trace(go.Scattermapbox(
+                fig.add_trace(go.Scattermap(
                     lat=grp[lat].iloc[[-1]], lon=grp[lon].iloc[[-1]],
                     mode="markers",
                     marker={"size": 10, "color": track_color, "opacity": 1.0},
@@ -175,7 +175,7 @@ def plot_ship_tracks(
     
     style = resolve_map_style(map_style)
     layout_kwargs = dict(
-        mapbox_style=style, mapbox_zoom=zoom or 2.5, mapbox_center=center,
+        map_style=style, map_zoom=zoom or 2.5, map_center=center,
         height=height, title=title,
         legend=dict(orientation="h", yanchor="bottom", y=0.01, xanchor="left", x=0.01),
         margin=dict(l=0, r=0, t=40, b=0),
@@ -296,7 +296,7 @@ def plot_individual_track(
         )
 
         if show_segments:
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 lat=sub_g[lat],
                 lon=sub_g[lon],
                 mode="lines+markers",
@@ -317,7 +317,7 @@ def plot_individual_track(
                 ),
             ))
         else:
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 lat=sub_g[lat],
                 lon=sub_g[lon],
                 mode="lines",
@@ -329,9 +329,9 @@ def plot_individual_track(
             ))
 
     fig.update_layout(
-        mapbox_style=resolve_map_style(map_style),
-        mapbox_zoom=3,
-        mapbox_center={"lat": float(pos[lat].median()), "lon": float(pos[lon].median())},
+        map_style=resolve_map_style(map_style),
+        map_zoom=3,
+        map_center={"lat": float(pos[lat].median()), "lon": float(pos[lon].median())},
         height=height,
         title=title,
         margin=dict(l=0, r=0, t=60, b=0),
