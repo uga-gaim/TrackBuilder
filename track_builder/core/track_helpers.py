@@ -762,7 +762,7 @@ def get_tracks_across_region(df_tracks : pd.DataFrame, minimal_region = "all"):
             .unique()
             .loc[
                 lambda x: x.apply(
-                    lambda vals: set(minimal_region).issubset(vals)
+                    lambda vals: required.issubset(vals)
                     )
             ].index
         )
