@@ -46,6 +46,12 @@ Marching GFW ("ground truth") to ASTD monthly segments will help evaluate TrackB
 ```
 
 ## 3. Pre-processing
+### Area Filter
+> We apply an area filter on GFW because some ASTD data points are missing (e.g., in the European area, segments are cut since they are not part of the ARCTIC working area).
+
+To include full trajectories from ASTD without significant data loss, we remove all GFW segments that pass (even by a single position) below longitude 60.0.
+By doing so, we only keep tracks within the ARCTIC area.
+
 ### Aggregation
 > Aggregating by day and by grid helps lighten the number of rows in the data by grouping all unique positions in the same area into one.
 
@@ -134,6 +140,13 @@ For example, for a given shipid and month, `ratio_ASTD` measures the proportion 
 $$
 score = ratio_{GFW} + ratio_{ASTD}
 $$
+> Maximum scores are computed by `(mmsi, month)` and `(shipid, month)` groups.
+$$
+maxscore_{mmsi} = max(\text{score within same mmsi and month})
+$$
+$$
+maxscore_{shipid} = max(\text{score within same shipid and month})
+$$
 
 ## 4. Matching Thresholds
 The ratios and score computed earlier help define the tolerance over how much missing data we allow for a match to be considered valid.
@@ -150,7 +163,8 @@ mask = (
     & (ratio_ASTD >= t_astd)
 
     # 3. Best match selection
-    & (score == max_score)
+    & (score == max_score_mmsi)
+    & (score == max_score_shipid)
 )
 ```
 Where:
@@ -167,6 +181,6 @@ Where:
 > 
 > *smaller tracks have a more stricts threshold (higher) as ships tend to stay longer in the same area so it's less possible that they have missing points (e.g. if it stays at bay for many days)
 
-> We retain only the match(es) with the highest score within each `(mmsi, month)` group. If multiple candidates share the same maximum score, they are dismissed.
+> We retain only the match(es) with the highest score within each `(mmsi, month)` and `(shipid, month)` groups. If multiple candidates share the same maximum score, they are dismissed.
 
-> We only keep (mmsi, month) with a unique shipid, and shipid with unique (mmsi, month) : 1-1 link
+> We only keep (mmsi, month) with a unique shipid, and (shipid, month) with unique mmsi : 1-1 link
