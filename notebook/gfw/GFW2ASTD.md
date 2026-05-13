@@ -10,6 +10,9 @@ This file present the rules used to match GFW (mmsi) to ASTD (shipid) fishing sh
 `longitude / latitude` : bottom left corner of the boat position grid with a resolution of 0.1*0.1 \
 `hours` : time spent in the position grid \
 `day` : the day of the record
+> **Warning** : Grids are not ordered - it's not possible to accurately reconstruct the trajectory over time (during a day) as the grids order in the csv doesn't represent the timeline trajectory of 
+> the 
+> ship
 
 ### ASTD
 `shipid` : ship identifier - only over each month \
@@ -20,36 +23,56 @@ This file present the rules used to match GFW (mmsi) to ASTD (shipid) fishing sh
 Marching GFW ("ground truth") to ASTD monthly segments will help evaluate TrackBuilder performances to accurately build tracks, while analyzing score calculations' correctness.
 
 ### Expected output :
+For each mmsi, we have the months that have matched a specific shipid. But it can also be used the other way around, for each matched shipid we can find the mmsi.
+By default the matching table is saved as a .csv file.
+* CSV example
 
-```json
-{
-  "{mmsi}": {
-    "{month}": "{shipid}",
-    "{month2}": "{shipid2}",
-    ...
-  }
-}
-```
-```json
-{
-  54321 : {
-    "2020-01": 789,
-    "2020-02": 456,
-    "2020-03": 123
-  },
-  98765 : {
-    "2020-05": 321,
-    "2020-07": 654,
-    "2020-12": 987
-  }
-}
-```
+| MMSI   | Date     | Shipid    |
+|--------|----------|-----------|
+| _mmsi_ | _month_  | _shipid_  |
+| _mmsi_ | _month2_ | _shipid2_ |
+| _..._  | _..._    | _.._      |
+Such as :
+
+| MMSI  | Date    | Shipid |
+|-------|---------|------|
+| 54321 | 2020-01 | 789 |
+| 54321 | 2020-02 | 456 |
+| 54321 | 2020-03 | 123 |
+| 98765 | 2020-05 | 321 |
+| 98765 | 2020-07 | 654 |
+| 98765 | 2020-12 | 987 |
+
+[//]: # (* JSON format)
+[//]: # (```json)
+[//]: # ({)
+[//]: # (  "{mmsi}": {)
+[//]: # (    "{month}": "{shipid}",)
+[//]: # (    "{month2}": "{shipid2}",)
+[//]: # (    ...)
+[//]: # (  })
+[//]: # (})
+[//]: # (```)
+[//]: # (```json)
+[//]: # ({)
+[//]: # (  54321 : {)
+[//]: # (    "2020-01": 789,)
+[//]: # (    "2020-02": 456,)
+[//]: # (    "2020-03": 123)
+[//]: # (  },)
+[//]: # (  98765 : {)
+[//]: # (    "2020-05": 321,)
+[//]: # (    "2020-07": 654,)
+[//]: # (    "2020-12": 987)
+[//]: # (  })
+[//]: # (})
+[//]: # (```)
 
 ## 3. Pre-processing
 ### Area Filter
 > We apply an area filter on GFW because some ASTD data points are missing (e.g., in the European area, segments are cut since they are not part of the ARCTIC working area).
 
-To include full trajectories from ASTD without significant data loss, we remove all GFW segments that pass (even by a single position) below longitude 60.0.
+To include full trajectories from ASTD without significant data loss, we remove all GFW segments that pass (even by a single position) below longitude 59.0.
 By doing so, we only keep tracks within the ARCTIC area.
 
 ### Aggregation
@@ -59,7 +82,7 @@ By doing so, we only keep tracks within the ARCTIC area.
 For both datasets, we group the data points by day.
 We then filter the ships using a date-based reference with daily resolution.
 This means that all records for a given ship within the same day, regardless of the exact time, are represented by that single day in the timeline.
-
+This approach is also mainly motivated by the fact that GFW granularity can accurately reach the daily level, but not finer resolutions.
 
 #### Per grids
 In ASTD, we convert positions into grid cells using the same resolution.
@@ -96,16 +119,17 @@ becomes:
 
 ___
 ### Join
-> Ths join (merge) gives us all the matching ship between GFW and ASTD that have been in the same area (grid) the same day.
+> Ths join (merge) gives us all the matching ship between GFW and ASTD that have been in the same area (grid) the same day (represented by its bottom left corner).
 
 We do an inner join on :
 - the day
 - the grid latitude
 - the grid longitude
+
 ___
 ### Scores
 
-We compute scores on both datasets : 
+We compute scores on both datasets and joined data. These scores will help filter perfect matchs to unperfect ones (using a threshold) : 
 * GFW
   * for each mmsi, per month
     * `gfw_n_mmsi` (or `sample_n_mmsi` for the GFW samples) : the total number of per day & per grid records
@@ -117,7 +141,7 @@ We compute scores on both datasets :
     * `match_n_mmsi` : the total number of per day & per grid match
 
 
-For the joined data, we then compute for each mmsi, per month:
+For the joined data (intersection of GFW and ASTD), we then compute for each mmsi, per month:
 #### Ratio_GFW
 > The ratio between `match_n_mmsi` and `gfw_n_mmsi` (proportion of matched points relative to total number of GFW points, for each mmsi, per month):
 $$
@@ -140,17 +164,35 @@ For example, for a given shipid and month, `ratio_ASTD` measures the proportion 
 $$
 score = ratio_{GFW} + ratio_{ASTD}
 $$
-> Maximum scores are computed by `(mmsi, month)` and `(shipid, month)` groups.
+> Maximum scores are then computed by `(mmsi, month)` and `(shipid, month)` groups.
 $$
-maxscore_{mmsi} = max(\text{score within same mmsi and month})
+maxscore_{mmsi} = max(\text{scores within same mmsi and month})
 $$
 $$
-maxscore_{shipid} = max(\text{score within same shipid and month})
+maxscore_{shipid} = max(\text{scores within same shipid and month})
 $$
 
-## 4. Matching Thresholds
+## 4. Matching
 The ratios and score computed earlier help define the tolerance over how much missing data we allow for a match to be considered valid.
 
+### Perfect match
+A perfect match mean all GFW and ASTD datapoints match.
+```python
+mask = (
+    # 1. Perfect GFW coverage constraint
+    (ratio_GFW == 1)
+
+    # 2. Perfect ASTD coverage constraint
+    & (ratio_ASTD == 1)
+)
+```
+
+> For perfect match the score is 2 in every situation (`ratio_ASTD` = 1 and `ratio_GFW` = 1)
+
+> **We only keep (mmsi, month) with a unique shipid, and (shipid, month) with unique mmsi : 1-1 link**
+
+### Threshold match
+A threshold match means that some GFW or ASTD points almost perfectly match, while allowing a margin of error defined by a threshold.
 ```python
 mask = (
     # 1. GFW coverage constraint (adaptive)
@@ -183,4 +225,4 @@ Where:
 
 > We retain only the match(es) with the highest score within each `(mmsi, month)` and `(shipid, month)` groups. If multiple candidates share the same maximum score, they are dismissed.
 
-> We only keep (mmsi, month) with a unique shipid, and (shipid, month) with unique mmsi : 1-1 link
+> **We only keep (mmsi, month) with a unique shipid, and (shipid, month) with unique mmsi : 1-1 link**
