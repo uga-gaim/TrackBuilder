@@ -155,7 +155,7 @@ _LIMIT_MULTIPLIERS: Dict[MatchingStrategy, Tuple[float, float, float]] = {
 SPEED_TYPICALS_N_PER_DAY = 4        # n speed samples per day
 SPEED_TYPICALS_CLIP_KMH  = 80.0     # clip unrealistic speeds
 SPEED_TYP_MIN_POINTS     = 5        # min samples kept per ship
-
+SPEED_TYP_MIN_SHIPS      = 50       # minimum number of ship to compute typ speed
 
 # =====================================================================
 # Geographic Zones (Bounding Boxes)

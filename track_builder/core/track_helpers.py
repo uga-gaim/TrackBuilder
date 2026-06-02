@@ -4,7 +4,7 @@ import geopandas as gpd
 import shapely
 from shapely.geometry import LineString, box
 
-
+import track_builder.config
 from track_builder.config import _LIT_CAPS_KMH
 
 
@@ -381,13 +381,13 @@ def  compute_typical_speeds_by_astd_cat(
 
     # final agg per astd_cat
     out = (ship_means.groupby('astd_cat')
-           .agg(typical_speed_kmh=('mean_speed_kmh', lambda x: x.quantile(0.9)),
+           .agg(typical_speed_kmh=('mean_speed_kmh', lambda x: x.quantile(0.98)),
                 n_ships_used=('shipid', 'nunique'))
            .reset_index()
            .sort_values('typical_speed_kmh'))
 
     #  Filter to take computed speed if minimal number of ships is matched
-    mask_filter = out['n_ships_used'] < 50
+    mask_filter = out['n_ships_used'] < track_builder.config.SPEED_TYP_MIN_SHIPS
 
     out.loc[mask_filter, 'typical_speed_kmh'] = np.nan
     out.loc[mask_filter, 'n_ships_used'] = 0

@@ -148,19 +148,20 @@ def _generate_and_score_candidates(cur: pd.Series,
             'implied_v_kmh': row.get('implied_v_kmh', np.nan),
         })
 
-    # a) no negative time or too large time gap
-    bad_time = (c['dt_hours'] < 0) | (c['dt_hours'] > opts.max_time_gap_hours * tg_mul)
-    for _, r in c[bad_time].iterrows():
-        _log(r, 'filter', 'time_window')
-    c = c[~bad_time]
-    if c.empty:
-        return c
-
-    # b) distance within limit
+    # a) distance within limit
     bad_dist = c['distance_km_fd'] > (opts.max_distance_km * dist_mul)
     for _, r in c[bad_dist].iterrows():
         _log(r, 'filter', 'distance_window')
     c = c[~bad_dist]
+    if c.empty:
+        return c
+
+    # b) no negative time or too large time gap + large gap and too large distance
+    small_dist = c['distance_km_fd'] <= (12 * dist_mul) # 12 is approximately min 0.1x0.1 diagonal resolution
+    bad_time = (c['dt_hours'] < 0) | (c['dt_hours'] > opts.max_time_gap_hours * tg_mul)
+    for _, r in c[bad_time & ~small_dist].iterrows():
+        _log(r, 'filter', 'time_window')
+    c = c[(~bad_time) | (bad_time & small_dist)]
     if c.empty:
         return c
 
@@ -213,7 +214,7 @@ def build_ship_tracks(
     
         astd_data: pd.DataFrame,
         *,
-        max_time_gap_hours: int = 25,
+        max_time_gap_hours: int = 24,
         max_distance_km: int = 400,
         min_track_length: int = 1,
         matching_strategy: MatchingStrategy = "conservative",
@@ -310,8 +311,16 @@ def build_ship_tracks(
                         chosen = r
                         break
                     else:
-                        logs.append({'match_id': f"{tail['shipid']}→{r['shipid']}", 'stage': 'skip',
-                                     'reason': 'already_assigned'})
+                        logs.append({
+                            'match_id': f"{tail['shipid']}→{r['shipid']}",
+                            'from_shipid': tail['shipid'],
+                            'to_shipid': r['shipid'],
+                            'from_month': tail['month'],
+                            'to_month': r['month'],
+                            'stage': 'skip',
+                            'reason': 'already_assigned'
+                        })
+                        
                 if chosen is None:
                     break
 
@@ -352,19 +361,15 @@ def find_track_candidates(
     """Find possible next segments for a given segment in a given month.
     Returns a DataFrame with columns:"""
     segs = _prepare_segments(astd_data)
-    segment_id_str = str(segment_id)
-    segs = segs.copy()
-    segs['shipid_str'] = segs['shipid'].astype(str)
-    this = segs[(segs['month'] == month) & (segs['shipid_str'] == segment_id_str)]
-    if this.empty:
-        raise ValueError("Segment ID not found for the specified month.")
-    cur = this.iloc[0]
 
     if segs.empty:
         res = pd.DataFrame()
         return (res, pd.DataFrame()) if return_logs else res
 
-    this = segs[(segs['month'] == month) & (segs['shipid'] == segment_id)]
+    segs = segs.copy()
+    segment_id_str = str(segment_id)
+    segs['shipid_str'] = segs['shipid'].astype(str)
+    this = segs[(segs['month'] == month) & (segs['shipid_str'] == segment_id_str)]
     if this.empty:
         raise ValueError("Segment ID not found for the specified month.")
     cur = this.iloc[0]
@@ -381,10 +386,13 @@ def find_track_candidates(
     multipliers = _LIMIT_MULTIPLIERS[opts.matching_strategy]
     speed_lookup = _compute_typical_speeds_from_data(astd_data)
 
-    # pool = all segments whose start is after the end of the current one and within the time window
-    segs = segs.copy()
-    segs['dt_hours'] = (segs['start_time'] - cur['end_time']).dt.total_seconds() / 3600.0
-    pool = segs[(segs['dt_hours'] >= 0) & (segs['dt_hours'] <= opts.max_time_gap_hours * multipliers[0])]
+    # pool = all segments for the next month
+    next_month = (pd.to_datetime(month) + pd.offsets.MonthBegin(1)).strftime('%Y-%m')
+    pool = segs[segs['month'] == next_month]
+
+    if pool.empty:
+        res = pd.DataFrame()
+        return (res, pd.DataFrame()) if return_logs else res
 
     logs: List[Dict] = []
     cands = _generate_and_score_candidates(cur, pool, opts, speed_lookup, multipliers, logs)
