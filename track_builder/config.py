@@ -144,7 +144,7 @@ MatchingStrategy = Literal["conservative", "balanced", "aggressive"]
 
 _LIMIT_MULTIPLIERS: Dict[MatchingStrategy, Tuple[float, float, float]] = {
     # (time_gap, distance, speed)
-    "conservative": (0.9, 0.9, 0.85),
+    "conservative": (0.9, 0.9, 1.0),
     "balanced": (1.0, 1.0, 1.0),
     "aggressive": (1.2, 1.2, 1.15),
 }

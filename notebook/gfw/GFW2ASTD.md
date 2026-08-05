@@ -1,5 +1,9 @@
-# GFW to ASTD - Matching rules
-This file present the rules used to match GFW (mmsi) to ASTD (shipid) fishing ships.
+# GFW to ASTD - Matching rules a.k.a ASTD Labeling
+This file present the rules used to match GFW (mmsi) to ASTD (shipid) fishing ships. This aims to labelize ASTD (shipid's) to GFW mmsi over the months.
+
+<div align="center">
+  <img src="labels-workflow.png" width="500" alt="Workflow TrackBuilder">
+</div>
 
 ## 1. Description
 
@@ -10,9 +14,7 @@ This file present the rules used to match GFW (mmsi) to ASTD (shipid) fishing sh
 `longitude / latitude` : bottom left corner of the boat position grid with a resolution of 0.1*0.1 \
 `hours` : time spent in the position grid \
 `day` : the day of the record
-> **Warning** : Grids are not ordered - it's not possible to accurately reconstruct the trajectory over time (during a day) as the grids order in the csv doesn't represent the timeline trajectory of 
-> the 
-> ship
+> **Warning** : Grids are not ordered - it's not possible to accurately reconstruct the trajectory over time (during a day) as the grids order in the csv don't represent the timeline trajectory of the ship
 
 ### ASTD
 `shipid` : ship identifier - only over each month \
@@ -21,6 +23,9 @@ This file present the rules used to match GFW (mmsi) to ASTD (shipid) fishing sh
 
 ## 2. Objective
 Marching GFW ("ground truth") to ASTD monthly segments will help evaluate TrackBuilder performances to accurately build tracks, while analyzing score calculations' correctness.
+<div align="center">
+  <img src="TrackBuilder-ASTD Labels.png" width="300" alt="TrackBuilder Labels">
+</div>
 
 ### Expected output :
 For each mmsi, we have the months that have matched a specific shipid. But it can also be used the other way around, for each matched shipid we can find the mmsi.
